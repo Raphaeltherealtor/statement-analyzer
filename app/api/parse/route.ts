@@ -6,11 +6,19 @@ import { randomUUID } from 'crypto'
 const client = new Anthropic()
 
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  // Use pdf-parse for server-side PDF text extraction
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require('pdf-parse') as (buffer: Buffer) => Promise<{ text: string }>
-  const data = await pdfParse(buffer)
-  return data.text
+  const PDFParser = require('pdf2json')
+  return new Promise((resolve, reject) => {
+    const parser = new PDFParser()
+    parser.on('pdfParser_dataError', (err: { parserError: Error }) => reject(err.parserError))
+    parser.on('pdfParser_dataReady', (data: { Pages: Array<{ Texts: Array<{ R: Array<{ T: string }> }> }> }) => {
+      const text = data.Pages.map((page) =>
+        page.Texts.map((t) => t.R.map((r) => decodeURIComponent(r.T)).join('')).join(' ')
+      ).join('\n')
+      resolve(text)
+    })
+    parser.parseBuffer(buffer)
+  })
 }
 
 async function parseCSVorExcel(buffer: Buffer, filename: string): Promise<string> {
