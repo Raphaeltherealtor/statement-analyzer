@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import { Transaction, ALL_CATEGORIES } from '@/lib/types'
+import { Transaction, DEFAULT_CATEGORIES } from '@/lib/types'
 import { randomUUID } from 'crypto'
 
 const client = new Anthropic()
@@ -21,7 +21,7 @@ async function extractTextFromPDF(buffer: Buffer): Promise<string> {
   })
 }
 
-async function parseCSVorExcel(buffer: Buffer, filename: string): Promise<string> {
+async function parseCSVorExcel(buffer: Buffer): Promise<string> {
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(buffer, { type: 'buffer' })
   let text = ''
@@ -34,48 +34,85 @@ async function parseCSVorExcel(buffer: Buffer, filename: string): Promise<string
   return text
 }
 
-async function categorizeWithClaude(rawText: string, filename: string): Promise<Transaction[]> {
+async function categorizeWithClaude(
+  rawText: string,
+  filename: string,
+  extraCategories: string[],
+): Promise<Transaction[]> {
+  const allCategories = [...DEFAULT_CATEGORIES, ...extraCategories.filter(c => !DEFAULT_CATEGORIES.includes(c))]
+
+  const customLine = extraCategories.length
+    ? `\nThe user has also defined custom categories: ${extraCategories.join(', ')}. Use one of these if it clearly fits a transaction.\n`
+    : ''
+
   const prompt = `You are a financial transaction parser. Extract ALL transactions from this bank/financial statement text and return them as JSON.
 
-For each transaction, determine the best category from this list:
-${ALL_CATEGORIES.join(', ')}
+For each transaction return:
+- date: "YYYY-MM-DD" (or "unknown")
+- description: the merchant name as it appears, cleaned up (drop POS DEBIT / SQ * / TST * style prefixes)
+- amount: positive = money spent, negative = money received (credits, deposits, refunds)
+- category: best match from the list below — pick "Uncategorized" if you are not confident
+- subcategory: short brand/merchant name (e.g. "Starbucks", "Costco Gas")
+- confidence: 0.0 to 1.0 — how sure you are about the category
 
-Rules:
-- Gas stations (Costco Gas, Arco, Shell, Chevron, 76, BP, Mobil, etc.) → "Gas & Fuel"
-- Supermarkets, grocery stores (Costco (non-gas), Trader Joe's, Whole Foods, Safeway, etc.) → "Groceries"
-- Restaurants, fast food, cafes, DoorDash, Uber Eats, GrubHub → "Restaurants & Dining"
-- Amazon.com, Amazon Prime, Amazon orders → "Amazon"
-- Target, Walmart, Costco (general), department stores → "Shopping & Retail"
-- Airlines, hotels, Airbnb, Uber, Lyft, parking → "Travel"
-- Netflix, Spotify, Apple, Disney+, games, movies → "Entertainment"
-- Pharmacies, doctors, dentists, hospitals → "Medical & Health"
-- Electric, gas, water, internet, phone bills → "Utilities"
-- Software subscriptions, SaaS, app stores, Adobe, Microsoft → "Subscriptions & Software"
-- Insurance payments → "Insurance"
-- Payroll, direct deposits, transfers IN → "Income & Deposits"
-- Transfers between accounts → "Transfers"
-- Car repairs, auto parts, registration, car wash → "Automotive"
-- Home Depot, Lowe's, furniture, home improvement → "Home & Garden"
-- Tuition, books, online courses → "Education"
-- Clothing stores, shoes → "Clothing"
-- Everything else → "Other"
+Confidence rubric:
+- 1.0  — clearly a known brand (Starbucks, Chevron, Netflix, Amazon)
+- 0.8  — strong inference (a name that obviously reads like a restaurant)
+- 0.6  — weak guess
+- < 0.6 — set category to "Uncategorized" instead
 
-For the amount field:
-- Positive numbers = money spent (expenses/debits)
-- Negative numbers = money received (credits, deposits, refunds)
+Allowed categories (use ONLY these strings):
+${allCategories.join(', ')}
+${customLine}
+Category rules:
+- Gas stations (Costco Gas, Arco, Shell, Chevron, 76, BP, Mobil, Valero, ExxonMobil) → "Gas & Fuel"
+- Supermarkets (Trader Joe's, Whole Foods, Safeway, Ralphs, Vons, Sprouts, H-Mart, Aldi) → "Groceries"
+- Costco Wholesale (non-gas) → "Groceries"
+- Fast food chains (McDonald's, Burger King, Taco Bell, Chipotle, In-N-Out, KFC, Wendy's, Jack in the Box, Subway, Five Guys, Panda Express, Popeyes, Chick-fil-A) → "Fast Food"
+- Sit-down restaurants, casual dining, food trucks (not fast food) → "Restaurants"
+- Starbucks, Dutch Bros, Peet's, Philz, Blue Bottle, local coffee, cafés → "Coffee Shops"
+- Bars, breweries, wineries, BevMo, Total Wine, liquor stores → "Bars & Alcohol"
+- DoorDash, Uber Eats, GrubHub, Postmates, Caviar, Instacart restaurant orders → "Food Delivery"
+- Amazon.com, Amazon Prime, Amazon Marketplace, AMZN → "Amazon"
+- Target, Walmart, department stores, general retail, Best Buy → "Shopping & Retail"
+- Airlines, hotels, Airbnb, VRBO, cruise lines → "Travel"
+- Uber, Lyft, taxi, ride sharing → "Rideshare & Taxi"
+- Movie theaters, concerts, events, video games, ticketing → "Entertainment"
+- Netflix, Spotify, Hulu, Disney+, HBO Max, YouTube Premium, Apple TV+, Paramount, Peacock → "Streaming & Subscriptions"
+- Doctors, dentists, hospitals, urgent care, labs, therapy → "Medical & Health"
+- CVS, Walgreens, Rite Aid, prescriptions → "Pharmacy"
+- Electric, gas, water, sewer, trash bills → "Utilities"
+- T-Mobile, Verizon, AT&T, Comcast, Xfinity, Spectrum, Cox, internet/phone bills → "Phone & Internet"
+- Adobe, Microsoft, Google Workspace, GitHub, OpenAI, Anthropic, dev tools, App Store, Google Play, SaaS → "Software & SaaS"
+- Insurance payments (auto, home, health, life) → "Insurance"
+- Payroll, direct deposits, money received from clients → "Income & Deposits"
+- Transfers between own accounts, Zelle to self, ACH transfers → "Transfers"
+- Auto repair, auto parts, AutoZone, O'Reilly, car wash, DMV registration → "Automotive"
+- Home Depot, Lowe's, Ace Hardware, IKEA, furniture, home improvement → "Home & Garden"
+- Tuition, schools, online courses, Udemy, Coursera, textbooks → "Education"
+- Clothing stores, shoe stores, athletic apparel → "Clothing"
+- Vet, Petco, PetSmart, Chewy, pet food, grooming → "Pets"
+- Donations, GoFundMe, nonprofits, churches, religious orgs → "Charity & Donations"
+- Staples, office supplies, coworking, business services → "Office & Business"
+- ATM withdrawals, cash advances → "Cash & ATM"
+- Bank fees, late fees, overdraft, interest charges, foreign transaction fees → "Fees & Interest"
+- IRS, state tax payments, DMV, passport, government fees → "Taxes & Government"
+- Truly unrecognizable merchants or ambiguous descriptors → "Uncategorized"
+- Recognizable but doesn't fit any bucket above → "Other"
 
 Return ONLY a valid JSON array with no markdown or explanation:
 [
   {
     "date": "YYYY-MM-DD",
-    "description": "merchant name as it appears",
-    "amount": 45.23,
-    "category": "Gas & Fuel",
-    "subcategory": "Costco Gas"
+    "description": "Starbucks #4823",
+    "amount": 6.45,
+    "category": "Coffee Shops",
+    "subcategory": "Starbucks",
+    "confidence": 1.0
   }
 ]
 
-If you cannot determine a date, use "unknown". Skip balance lines, headers, and summary rows.
+Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BALANCE" entries.
 
 Statement text:
 ${rawText.slice(0, 80000)}`
@@ -89,7 +126,6 @@ ${rawText.slice(0, 80000)}`
   const content = message.content[0]
   if (content.type !== 'text') throw new Error('Unexpected response type')
 
-  // Extract JSON from response
   const text = content.text.trim()
   const jsonMatch = text.match(/\[[\s\S]*\]/)
   if (!jsonMatch) throw new Error('No JSON array found in response')
@@ -102,13 +138,15 @@ ${rawText.slice(0, 80000)}`
     amount: number
     category: string
     subcategory?: string
+    confidence?: number
   }) => ({
     id: randomUUID(),
     date: t.date || 'unknown',
     description: t.description || 'Unknown',
     amount: parseFloat(String(t.amount)) || 0,
-    category: t.category || 'Other',
+    category: t.category || 'Uncategorized',
     subcategory: t.subcategory,
+    confidence: typeof t.confidence === 'number' ? t.confidence : undefined,
     source: filename,
   })) as Transaction[]
 }
@@ -117,6 +155,16 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
+    const extraCategoriesRaw = formData.get('extraCategories')
+    const extraCategories: string[] = (() => {
+      if (typeof extraCategoriesRaw !== 'string') return []
+      try {
+        const parsed = JSON.parse(extraCategoriesRaw)
+        return Array.isArray(parsed) ? parsed.filter((c) => typeof c === 'string') : []
+      } catch {
+        return []
+      }
+    })()
 
     if (!files || files.length === 0) {
       return Response.json({ error: 'No files provided' }, { status: 400 })
@@ -138,7 +186,7 @@ export async function POST(request: NextRequest) {
         } else if (ext === 'csv') {
           rawText = buffer.toString('utf-8')
         } else if (ext === 'xlsx' || ext === 'xls') {
-          rawText = await parseCSVorExcel(buffer, filename)
+          rawText = await parseCSVorExcel(buffer)
         } else {
           errors.push({ file: filename, error: 'Unsupported file type' })
           continue
@@ -149,7 +197,7 @@ export async function POST(request: NextRequest) {
           continue
         }
 
-        const transactions = await categorizeWithClaude(rawText, filename)
+        const transactions = await categorizeWithClaude(rawText, filename, extraCategories)
         allTransactions.push(...transactions)
       } catch (err) {
         errors.push({
