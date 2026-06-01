@@ -1,7 +1,16 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, RefreshCw, Download, TrendingDown, TrendingUp, BarChart3, FlagTriangleRight } from 'lucide-react'
+import {
+  AlertCircle,
+  RefreshCw,
+  Download,
+  TrendingDown,
+  TrendingUp,
+  BarChart3,
+  FlagTriangleRight,
+  X,
+} from 'lucide-react'
 import UploadZone from '@/components/UploadZone'
 import CategoryCard from '@/components/CategoryCard'
 import ReviewPanel from '@/components/ReviewPanel'
@@ -21,13 +30,17 @@ import {
   saveCustomCategories,
   loadMerchantRules,
   saveMerchantRules,
+  loadActiveJob,
+  saveActiveJob,
+  ActiveJob,
 } from '@/lib/storage'
 
 const CONFIDENCE_THRESHOLD = 0.7
+const POLL_INTERVAL_MS = 3000
+const POLL_BACKOFF_MS = 5000
 
 export default function Home() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
-  const [isProcessing, setIsProcessing] = useState(false)
   const [errors, setErrors] = useState<{ file: string; error: string }[]>([])
   const [processedFiles, setProcessedFiles] = useState<string[]>([])
   const [yearFilter, setYearFilter] = useState<string>('all')
@@ -37,10 +50,24 @@ export default function Home() {
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
   const [reviewOpen, setReviewOpen] = useState(false)
 
-  // Load persisted preferences once
+  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null)
+  const [resumed, setResumed] = useState(false)
+
+  const isProcessing = activeJob !== null
+
+  // One-time hydration of preferences + any in-flight job from localStorage.
+  // Deferred to a microtask so the strict "no setState in effect" rule sees
+  // these as async writes rather than cascading sync ones.
   useEffect(() => {
-    setCustomCategories(loadCustomCategories())
-    setMerchantRules(loadMerchantRules())
+    queueMicrotask(() => {
+      setCustomCategories(loadCustomCategories())
+      setMerchantRules(loadMerchantRules())
+      const job = loadActiveJob()
+      if (job) {
+        setActiveJob(job)
+        setResumed(true)
+      }
+    })
   }, [])
 
   const emojiFor = useCallback((name: string): string => {
@@ -49,7 +76,6 @@ export default function Home() {
     return custom?.emoji ?? '📌'
   }, [customCategories])
 
-  // List shown in the review picker (default + custom, minus the Uncategorized bucket)
   const pickerCategories = useMemo(() => {
     const all = [
       ...DEFAULT_CATEGORIES.filter(c => c !== 'Uncategorized').map(name => ({ name, emoji: DEFAULT_CATEGORY_EMOJIS[name] })),
@@ -63,7 +89,6 @@ export default function Home() {
     })
   }, [customCategories])
 
-  // Apply merchant rules + flag needsReview when AI is uncertain
   const applyRulesAndFlag = useCallback((incoming: Transaction[], rules: MerchantRule[]): Transaction[] => {
     const ruleMap = new Map(rules.map(r => [r.normalizedMerchant, r.category]))
     return incoming.map(t => {
@@ -79,13 +104,91 @@ export default function Home() {
     })
   }, [])
 
+  // Apply a finished job's results to UI state
+  const consumeDoneJob = useCallback(
+    (jobTxns: Transaction[], jobErrors: { file: string; error: string }[], fileNames: string[]) => {
+      const processed = applyRulesAndFlag(jobTxns, merchantRules)
+      const reviewCount = processed.filter(t => t.needsReview).length
+
+      setTransactions(prev => {
+        const existingIds = new Set(prev.map(t => t.id))
+        const newOnes = processed.filter(t => !existingIds.has(t.id))
+        return [...prev, ...newOnes]
+      })
+      setProcessedFiles(prev => [...new Set([...prev, ...fileNames])])
+      if (jobErrors.length > 0) setErrors(jobErrors)
+      if (reviewCount > 0) setReviewOpen(true)
+    },
+    [applyRulesAndFlag, merchantRules]
+  )
+
+  // Poll the active job until it finishes (works in background tabs because
+  // setTimeout still fires, just throttled; resumes naturally on page reload).
+  useEffect(() => {
+    if (!activeJob) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const jobId = activeJob.jobId
+    const jobFileNames = activeJob.fileNames
+
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const res = await fetch(
+          `/api/parse/status?jobId=${encodeURIComponent(jobId)}`,
+          { cache: 'no-store' }
+        )
+        if (cancelled) return
+        const data = await res.json().catch(() => ({}))
+
+        if (res.status === 404 || data.status === 'missing') {
+          setErrors([{ file: jobFileNames.join(', '), error: 'Job expired or not found on the server' }])
+          saveActiveJob(null)
+          setActiveJob(null)
+          setResumed(false)
+          return
+        }
+
+        if (data.status === 'done') {
+          consumeDoneJob(
+            (data.transactions || []) as Transaction[],
+            data.errors || [],
+            data.fileNames || jobFileNames
+          )
+          saveActiveJob(null)
+          setActiveJob(null)
+          setResumed(false)
+          return
+        }
+
+        if (data.status === 'error') {
+          setErrors([{ file: jobFileNames.join(', '), error: data.message || 'Job failed' }])
+          saveActiveJob(null)
+          setActiveJob(null)
+          setResumed(false)
+          return
+        }
+
+        timer = setTimeout(poll, POLL_INTERVAL_MS)
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, POLL_BACKOFF_MS)
+      }
+    }
+
+    poll()
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [activeJob, consumeDoneJob])
+
   const handleUpload = async (files: File[]) => {
-    setIsProcessing(true)
     setErrors([])
 
     const formData = new FormData()
     files.forEach(f => formData.append('files', f))
-    // Tell the parser about user-defined categories so it can use them
     if (customCategories.length > 0) {
       formData.append('extraCategories', JSON.stringify(customCategories.map(c => c.name)))
     }
@@ -94,30 +197,28 @@ export default function Home() {
       const res = await fetch('/api/parse', { method: 'POST', body: formData })
       const data = await res.json()
 
-      if (data.error) {
-        setErrors([{ file: 'All files', error: data.error }])
+      if (!res.ok || data.error) {
+        setErrors([{ file: 'Upload', error: data.error || `Server returned ${res.status}` }])
         return
       }
 
-      const processed = applyRulesAndFlag(data.transactions as Transaction[], merchantRules)
-      const reviewCountThisBatch = processed.filter(t => t.needsReview).length
-
-      setTransactions(prev => {
-        const existingIds = new Set(prev.map(t => t.id))
-        const newOnes = processed.filter(t => !existingIds.has(t.id))
-        return [...prev, ...newOnes]
-      })
-      setProcessedFiles(prev => [...new Set([...prev, ...files.map(f => f.name)])])
-
-      if (data.errors?.length > 0) setErrors(data.errors)
-
-      // Auto-open the review panel when there's something to review
-      if (reviewCountThisBatch > 0) setReviewOpen(true)
+      const newJob: ActiveJob = {
+        jobId: data.jobId,
+        fileNames: data.fileNames || files.map(f => f.name),
+        startedAt: Date.now(),
+      }
+      saveActiveJob(newJob)
+      setActiveJob(newJob)
+      setResumed(false)
     } catch {
-      setErrors([{ file: 'Request', error: 'Failed to connect to server' }])
-    } finally {
-      setIsProcessing(false)
+      setErrors([{ file: 'Upload', error: 'Failed to connect to server' }])
     }
+  }
+
+  const cancelActiveJob = () => {
+    saveActiveJob(null)
+    setActiveJob(null)
+    setResumed(false)
   }
 
   const clearAll = () => {
@@ -138,8 +239,6 @@ export default function Home() {
         if (t.id === transactionId) {
           return { ...t, category, needsReview: false, confidence: 1 }
         }
-        // Retroactively apply the same category to other transactions
-        // from the same merchant (regardless of prior categorization).
         if (persistRule && normalized && normalizeMerchant(t.description) === normalized) {
           return { ...t, category, needsReview: false, confidence: 1 }
         }
@@ -209,10 +308,7 @@ export default function Home() {
     .filter(c => POTENTIALLY_DEDUCTIBLE.includes(c.name))
     .reduce((s, c) => s + c.total, 0)
 
-  const reviewQueue = useMemo(
-    () => filtered.filter(t => t.needsReview),
-    [filtered]
-  )
+  const reviewQueue = filtered.filter(t => t.needsReview)
 
   const exportAll = () => {
     const rows = [
@@ -247,10 +343,30 @@ export default function Home() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-8">
           <UploadZone onUpload={handleUpload} isProcessing={isProcessing} />
 
-          {isProcessing && (
-            <div className="mt-4 flex items-center gap-2 text-blue-600">
-              <RefreshCw size={16} className="animate-spin" />
-              <span className="text-sm">Reading files and categorizing with AI... this may take a minute.</span>
+          {activeJob && (
+            <div className="mt-4 flex items-start justify-between gap-3 bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div className="flex items-start gap-2 min-w-0">
+                <RefreshCw size={16} className="text-blue-600 animate-spin mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-blue-900">
+                    {resumed ? 'Resuming your previous upload…' : 'Reading and categorizing with AI…'}
+                  </p>
+                  <p className="text-xs text-blue-700/80 mt-0.5 break-words">
+                    {activeJob.fileNames.join(', ')}
+                  </p>
+                  <p className="text-xs text-blue-700/60 mt-1">
+                    Safe to switch tabs or close this one — the work keeps running. Come back and your results will be here.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={cancelActiveJob}
+                className="text-blue-600 hover:text-blue-900 text-xs flex items-center gap-1 shrink-0"
+                title="Stop watching this job (it'll keep running on the server but the result will be dropped)"
+              >
+                <X size={14} />
+                Stop watching
+              </button>
             </div>
           )}
 

@@ -1,10 +1,12 @@
 import { NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
+import { waitUntil } from '@vercel/functions'
 import { Transaction, DEFAULT_CATEGORIES } from '@/lib/types'
+import { writeJob, blobConfigured, JobError } from '@/lib/jobs'
 import { randomUUID } from 'crypto'
 
-// Vercel serverless function timeout — max on Hobby is 60s.
-// Opus easily blew past 10s default; Sonnet at 60s gives plenty of headroom.
+// Even though we return early via waitUntil, the function must stay alive until
+// the background work finishes. 60s is the Hobby cap.
 export const maxDuration = 60
 
 const client = new Anthropic()
@@ -121,8 +123,6 @@ Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BAL
 Statement text:
 ${rawText.slice(0, 80000)}`
 
-  // Sonnet is ~4x faster than Opus for structured extraction and equally accurate
-  // on this task. Opus was tripping Vercel's 60s function timeout on real statements.
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 8192,
@@ -157,7 +157,67 @@ ${rawText.slice(0, 80000)}`
   })) as Transaction[]
 }
 
+async function processJob(
+  jobId: string,
+  fileData: Array<{ name: string; buffer: Buffer }>,
+  extraCategories: string[],
+) {
+  const fileNames = fileData.map(f => f.name)
+  try {
+    const results = await Promise.all(
+      fileData.map(async (f): Promise<{ transactions: Transaction[]; error: JobError | null }> => {
+        try {
+          const ext = f.name.split('.').pop()?.toLowerCase()
+          let rawText = ''
+
+          if (ext === 'pdf') rawText = await extractTextFromPDF(f.buffer)
+          else if (ext === 'csv') rawText = f.buffer.toString('utf-8')
+          else if (ext === 'xlsx' || ext === 'xls') rawText = await parseCSVorExcel(f.buffer)
+          else return { transactions: [], error: { file: f.name, error: 'Unsupported file type' } }
+
+          if (!rawText.trim()) {
+            return { transactions: [], error: { file: f.name, error: 'Could not extract text from file' } }
+          }
+
+          const transactions = await categorizeWithClaude(rawText, f.name, extraCategories)
+          return { transactions, error: null }
+        } catch (err) {
+          return {
+            transactions: [],
+            error: { file: f.name, error: err instanceof Error ? err.message : 'Unknown error' },
+          }
+        }
+      })
+    )
+
+    const transactions = results.flatMap(r => r.transactions)
+    const errors = results.flatMap(r => (r.error ? [r.error] : []))
+
+    await writeJob(jobId, {
+      status: 'done',
+      transactions,
+      errors,
+      fileNames,
+      completedAt: Date.now(),
+    })
+  } catch (err) {
+    await writeJob(jobId, {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Unknown error',
+      fileNames,
+      failedAt: Date.now(),
+    })
+  }
+}
+
 export async function POST(request: NextRequest) {
+  if (!blobConfigured()) {
+    return Response.json(
+      { error: 'Vercel Blob is not enabled. Connect Blob storage in the Vercel dashboard so jobs can be persisted.' },
+      { status: 500 }
+    )
+  }
+
   try {
     const formData = await request.formData()
     const files = formData.getAll('files') as File[]
@@ -176,47 +236,27 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'No files provided' }, { status: 400 })
     }
 
-    // Process files in parallel so total wall time = slowest file, not sum
-    const results = await Promise.all(
-      files.map(async (file): Promise<{ transactions: Transaction[]; error?: { file: string; error: string } }> => {
-        try {
-          const buffer = Buffer.from(await file.arrayBuffer())
-          const filename = file.name
-          const ext = filename.split('.').pop()?.toLowerCase()
-
-          let rawText = ''
-          if (ext === 'pdf') {
-            rawText = await extractTextFromPDF(buffer)
-          } else if (ext === 'csv') {
-            rawText = buffer.toString('utf-8')
-          } else if (ext === 'xlsx' || ext === 'xls') {
-            rawText = await parseCSVorExcel(buffer)
-          } else {
-            return { transactions: [], error: { file: filename, error: 'Unsupported file type' } }
-          }
-
-          if (!rawText.trim()) {
-            return { transactions: [], error: { file: filename, error: 'Could not extract text from file' } }
-          }
-
-          const transactions = await categorizeWithClaude(rawText, filename, extraCategories)
-          return { transactions }
-        } catch (err) {
-          return {
-            transactions: [],
-            error: { file: file.name, error: err instanceof Error ? err.message : 'Unknown error' },
-          }
-        }
-      })
+    // Read file contents into memory before returning — formData/File objects
+    // are tied to the request and won't be valid in the waitUntil handler.
+    const fileData = await Promise.all(
+      files.map(async f => ({ name: f.name, buffer: Buffer.from(await f.arrayBuffer()) }))
     )
 
-    const allTransactions = results.flatMap(r => r.transactions)
-    const errors = results.flatMap(r => (r.error ? [r.error] : []))
+    const jobId = randomUUID()
 
-    return Response.json({ transactions: allTransactions, errors })
+    await writeJob(jobId, {
+      status: 'processing',
+      createdAt: Date.now(),
+      fileNames: fileData.map(f => f.name),
+    })
+
+    // Kick off processing in the background and return immediately
+    waitUntil(processJob(jobId, fileData, extraCategories))
+
+    return Response.json({ jobId, fileNames: fileData.map(f => f.name) })
   } catch (err) {
     return Response.json(
-      { error: err instanceof Error ? err.message : 'Failed to parse files' },
+      { error: err instanceof Error ? err.message : 'Failed to start parse job' },
       { status: 500 }
     )
   }
