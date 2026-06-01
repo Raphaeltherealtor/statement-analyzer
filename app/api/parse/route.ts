@@ -3,6 +3,10 @@ import Anthropic from '@anthropic-ai/sdk'
 import { Transaction, DEFAULT_CATEGORIES } from '@/lib/types'
 import { randomUUID } from 'crypto'
 
+// Vercel serverless function timeout — max on Hobby is 60s.
+// Opus easily blew past 10s default; Sonnet at 60s gives plenty of headroom.
+export const maxDuration = 60
+
 const client = new Anthropic()
 
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
@@ -117,8 +121,10 @@ Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BAL
 Statement text:
 ${rawText.slice(0, 80000)}`
 
+  // Sonnet is ~4x faster than Opus for structured extraction and equally accurate
+  // on this task. Opus was tripping Vercel's 60s function timeout on real statements.
   const message = await client.messages.create({
-    model: 'claude-opus-4-6',
+    model: 'claude-sonnet-4-6',
     max_tokens: 8192,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -170,42 +176,42 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'No files provided' }, { status: 400 })
     }
 
-    const allTransactions: Transaction[] = []
-    const errors: { file: string; error: string }[] = []
+    // Process files in parallel so total wall time = slowest file, not sum
+    const results = await Promise.all(
+      files.map(async (file): Promise<{ transactions: Transaction[]; error?: { file: string; error: string } }> => {
+        try {
+          const buffer = Buffer.from(await file.arrayBuffer())
+          const filename = file.name
+          const ext = filename.split('.').pop()?.toLowerCase()
 
-    for (const file of files) {
-      try {
-        const buffer = Buffer.from(await file.arrayBuffer())
-        const filename = file.name
-        const ext = filename.split('.').pop()?.toLowerCase()
+          let rawText = ''
+          if (ext === 'pdf') {
+            rawText = await extractTextFromPDF(buffer)
+          } else if (ext === 'csv') {
+            rawText = buffer.toString('utf-8')
+          } else if (ext === 'xlsx' || ext === 'xls') {
+            rawText = await parseCSVorExcel(buffer)
+          } else {
+            return { transactions: [], error: { file: filename, error: 'Unsupported file type' } }
+          }
 
-        let rawText = ''
+          if (!rawText.trim()) {
+            return { transactions: [], error: { file: filename, error: 'Could not extract text from file' } }
+          }
 
-        if (ext === 'pdf') {
-          rawText = await extractTextFromPDF(buffer)
-        } else if (ext === 'csv') {
-          rawText = buffer.toString('utf-8')
-        } else if (ext === 'xlsx' || ext === 'xls') {
-          rawText = await parseCSVorExcel(buffer)
-        } else {
-          errors.push({ file: filename, error: 'Unsupported file type' })
-          continue
+          const transactions = await categorizeWithClaude(rawText, filename, extraCategories)
+          return { transactions }
+        } catch (err) {
+          return {
+            transactions: [],
+            error: { file: file.name, error: err instanceof Error ? err.message : 'Unknown error' },
+          }
         }
+      })
+    )
 
-        if (!rawText.trim()) {
-          errors.push({ file: filename, error: 'Could not extract text from file' })
-          continue
-        }
-
-        const transactions = await categorizeWithClaude(rawText, filename, extraCategories)
-        allTransactions.push(...transactions)
-      } catch (err) {
-        errors.push({
-          file: file.name,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        })
-      }
-    }
+    const allTransactions = results.flatMap(r => r.transactions)
+    const errors = results.flatMap(r => (r.error ? [r.error] : []))
 
     return Response.json({ transactions: allTransactions, errors })
   } catch (err) {
