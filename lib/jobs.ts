@@ -43,9 +43,24 @@ interface DbRow {
   updated_at: string
 }
 
+// Anything older than this that's still 'processing' is almost certainly a
+// dead function (Vercel killed it past maxDuration before it could write a
+// terminal state). Treat it as a failure so the client unblocks instead of
+// polling forever.
+const STALE_PROCESSING_MS = 90_000
+
 function rowToStatus(row: DbRow): JobStatus {
   const fileNames = row.file_names ?? []
   if (row.status === 'processing') {
+    const ageMs = Date.now() - new Date(row.created_at).getTime()
+    if (ageMs > STALE_PROCESSING_MS) {
+      return {
+        status: 'error',
+        message: 'Processing timed out — the file may be too large for the current plan limits',
+        failedAt: new Date(row.updated_at).getTime(),
+        fileNames,
+      }
+    }
     return { status: 'processing', createdAt: new Date(row.created_at).getTime(), fileNames }
   }
   if (row.status === 'done') {

@@ -52,8 +52,9 @@ export default function Home() {
 
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(null)
   const [resumed, setResumed] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
-  const isProcessing = activeJob !== null
+  const isProcessing = submitting || activeJob !== null
 
   // One-time hydration of preferences + any in-flight job from localStorage.
   // Deferred to a microtask so the strict "no setState in effect" rule sees
@@ -185,6 +186,10 @@ export default function Home() {
   }, [activeJob, consumeDoneJob])
 
   const handleUpload = async (files: File[]) => {
+    // Hard guard against double-submit (a second click before the first POST
+    // resolves would otherwise queue a duplicate job server-side).
+    if (submitting || activeJob) return
+    setSubmitting(true)
     setErrors([])
 
     const formData = new FormData()
@@ -212,6 +217,8 @@ export default function Home() {
       setResumed(false)
     } catch {
       setErrors([{ file: 'Upload', error: 'Failed to connect to server' }])
+    } finally {
+      setSubmitting(false)
     }
   }
 

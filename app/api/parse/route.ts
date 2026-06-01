@@ -123,8 +123,11 @@ Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BAL
 Statement text:
 ${rawText.slice(0, 80000)}`
 
+  // Haiku 4.5 is dramatically faster than Sonnet/Opus on structured extraction
+  // and is the only Claude tier consistently completing inside Vercel's 60s
+  // serverless cap on real multi-page statements.
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: 'claude-haiku-4-5',
     max_tokens: 8192,
     messages: [{ role: 'user', content: prompt }],
   })
@@ -157,40 +160,60 @@ ${rawText.slice(0, 80000)}`
   })) as Transaction[]
 }
 
+// Stay a few seconds under maxDuration so we have time to write the error
+// row to Supabase before Vercel kills the function.
+const PROCESS_TIMEOUT_MS = 55_000
+
+async function runFiles(
+  fileData: Array<{ name: string; buffer: Buffer }>,
+  extraCategories: string[],
+) {
+  const results = await Promise.all(
+    fileData.map(async (f): Promise<{ transactions: Transaction[]; error: JobError | null }> => {
+      try {
+        const ext = f.name.split('.').pop()?.toLowerCase()
+        let rawText = ''
+
+        if (ext === 'pdf') rawText = await extractTextFromPDF(f.buffer)
+        else if (ext === 'csv') rawText = f.buffer.toString('utf-8')
+        else if (ext === 'xlsx' || ext === 'xls') rawText = await parseCSVorExcel(f.buffer)
+        else return { transactions: [], error: { file: f.name, error: 'Unsupported file type' } }
+
+        if (!rawText.trim()) {
+          return { transactions: [], error: { file: f.name, error: 'Could not extract text from file' } }
+        }
+
+        const transactions = await categorizeWithClaude(rawText, f.name, extraCategories)
+        return { transactions, error: null }
+      } catch (err) {
+        return {
+          transactions: [],
+          error: { file: f.name, error: err instanceof Error ? err.message : 'Unknown error' },
+        }
+      }
+    })
+  )
+
+  const transactions = results.flatMap(r => r.transactions)
+  const errors = results.flatMap(r => (r.error ? [r.error] : []))
+  return { transactions, errors }
+}
+
 async function processJob(
   jobId: string,
   fileData: Array<{ name: string; buffer: Buffer }>,
   extraCategories: string[],
 ) {
   try {
-    const results = await Promise.all(
-      fileData.map(async (f): Promise<{ transactions: Transaction[]; error: JobError | null }> => {
-        try {
-          const ext = f.name.split('.').pop()?.toLowerCase()
-          let rawText = ''
-
-          if (ext === 'pdf') rawText = await extractTextFromPDF(f.buffer)
-          else if (ext === 'csv') rawText = f.buffer.toString('utf-8')
-          else if (ext === 'xlsx' || ext === 'xls') rawText = await parseCSVorExcel(f.buffer)
-          else return { transactions: [], error: { file: f.name, error: 'Unsupported file type' } }
-
-          if (!rawText.trim()) {
-            return { transactions: [], error: { file: f.name, error: 'Could not extract text from file' } }
-          }
-
-          const transactions = await categorizeWithClaude(rawText, f.name, extraCategories)
-          return { transactions, error: null }
-        } catch (err) {
-          return {
-            transactions: [],
-            error: { file: f.name, error: err instanceof Error ? err.message : 'Unknown error' },
-          }
-        }
-      })
-    )
-
-    const transactions = results.flatMap(r => r.transactions)
-    const errors = results.flatMap(r => (r.error ? [r.error] : []))
+    const { transactions, errors } = await Promise.race([
+      runFiles(fileData, extraCategories),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('Processing exceeded the 55s budget. Try a smaller file or split into multiple uploads.')),
+          PROCESS_TIMEOUT_MS
+        )
+      ),
+    ])
 
     await completeJob(jobId, transactions, errors)
   } catch (err) {
