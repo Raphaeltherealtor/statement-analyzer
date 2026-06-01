@@ -2,7 +2,7 @@ import { CustomCategory, MerchantRule } from './types'
 
 const CUSTOM_CATEGORIES_KEY = 'sa-custom-categories-v1'
 const MERCHANT_RULES_KEY = 'sa-merchant-rules-v1'
-const ACTIVE_JOB_KEY = 'sa-active-job-v1'
+const ACTIVE_JOBS_KEY = 'sa-active-jobs-v2'
 
 export interface ActiveJob {
   jobId: string
@@ -40,21 +40,24 @@ export function saveMerchantRules(rules: MerchantRule[]): void {
   localStorage.setItem(MERCHANT_RULES_KEY, JSON.stringify(rules))
 }
 
-export function loadActiveJob(): ActiveJob | null {
-  if (typeof window === 'undefined') return null
+export function loadActiveJobs(): ActiveJob[] {
+  if (typeof window === 'undefined') return []
   try {
-    const raw = localStorage.getItem(ACTIVE_JOB_KEY)
-    if (!raw) return null
+    const raw = localStorage.getItem(ACTIVE_JOBS_KEY)
+    if (!raw) return []
     const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed.jobId === 'string') return parsed as ActiveJob
-    return null
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (j): j is ActiveJob =>
+        j && typeof j.jobId === 'string' && Array.isArray(j.fileNames)
+    )
   } catch {
-    return null
+    return []
   }
 }
 
-export function saveActiveJob(job: ActiveJob | null): void {
+export function saveActiveJobs(jobs: ActiveJob[]): void {
   if (typeof window === 'undefined') return
-  if (job) localStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify(job))
-  else localStorage.removeItem(ACTIVE_JOB_KEY)
+  if (jobs.length === 0) localStorage.removeItem(ACTIVE_JOBS_KEY)
+  else localStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify(jobs))
 }

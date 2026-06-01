@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import {
   AlertCircle,
   RefreshCw,
@@ -10,6 +11,7 @@ import {
   BarChart3,
   FlagTriangleRight,
   X,
+  History,
 } from 'lucide-react'
 import UploadZone from '@/components/UploadZone'
 import CategoryCard from '@/components/CategoryCard'
@@ -23,6 +25,7 @@ import {
   DEFAULT_CATEGORY_EMOJIS,
   DEFAULT_CATEGORIES,
   POTENTIALLY_DEDUCTIBLE,
+  TAX_LINE,
 } from '@/lib/types'
 import { normalizeMerchant } from '@/lib/normalize'
 import {
@@ -30,54 +33,169 @@ import {
   saveCustomCategories,
   loadMerchantRules,
   saveMerchantRules,
-  loadActiveJob,
-  saveActiveJob,
+  loadActiveJobs,
+  saveActiveJobs,
   ActiveJob,
 } from '@/lib/storage'
 
 const CONFIDENCE_THRESHOLD = 0.7
 const POLL_INTERVAL_MS = 3000
-const POLL_BACKOFF_MS = 5000
+
+interface CompletedJob {
+  id: string
+  fileNames: string[]
+  completedAt: number
+  transactions: Transaction[]
+  errors: { file: string; error: string }[]
+}
+
+// Pulled out of the component so effects can call it without dependency churn.
+function applyRules(incoming: Transaction[], rules: MerchantRule[]): Transaction[] {
+  const ruleMap = new Map(rules.map(r => [r.normalizedMerchant, r.category]))
+  return incoming.map(t => {
+    const key = normalizeMerchant(t.description)
+    const ruleCategory = key ? ruleMap.get(key) : undefined
+    if (ruleCategory) {
+      return { ...t, category: ruleCategory, needsReview: false, confidence: 1 }
+    }
+    const isUncertain =
+      t.category === 'Uncategorized' ||
+      (typeof t.confidence === 'number' && t.confidence < CONFIDENCE_THRESHOLD)
+    return { ...t, needsReview: isUncertain }
+  })
+}
 
 export default function Home() {
-  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [completedJobs, setCompletedJobs] = useState<CompletedJob[]>([])
+  const [activeJobs, setActiveJobs] = useState<ActiveJob[]>([])
   const [errors, setErrors] = useState<{ file: string; error: string }[]>([])
-  const [processedFiles, setProcessedFiles] = useState<string[]>([])
   const [yearFilter, setYearFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
 
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
   const [reviewOpen, setReviewOpen] = useState(false)
-
-  const [activeJob, setActiveJob] = useState<ActiveJob | null>(null)
-  const [resumed, setResumed] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [resumed, setResumed] = useState(false)
 
-  const isProcessing = submitting || activeJob !== null
+  const isProcessing = submitting || activeJobs.length > 0
 
-  // One-time hydration of preferences + any in-flight job from localStorage.
-  // Deferred to a microtask so the strict "no setState in effect" rule sees
-  // these as async writes rather than cascading sync ones.
+  // Mount: hydrate prefs + load past completed jobs + resume any in-flight jobs.
   useEffect(() => {
-    queueMicrotask(() => {
-      setCustomCategories(loadCustomCategories())
-      setMerchantRules(loadMerchantRules())
-      const job = loadActiveJob()
-      if (job) {
-        setActiveJob(job)
+    queueMicrotask(async () => {
+      const customs = loadCustomCategories()
+      const rules = loadMerchantRules()
+      const active = loadActiveJobs()
+      setCustomCategories(customs)
+      setMerchantRules(rules)
+      if (active.length > 0) {
+        setActiveJobs(active)
         setResumed(true)
+      }
+
+      try {
+        const res = await fetch('/api/parse/jobs')
+        if (!res.ok) return
+        const data = await res.json()
+        const jobs: CompletedJob[] = ((data.jobs as Array<{
+          id: string
+          fileNames: string[]
+          completedAt: number
+          transactions: Transaction[]
+          errors: { file: string; error: string }[]
+        }>) || []).map(j => ({
+          id: j.id,
+          fileNames: j.fileNames,
+          completedAt: j.completedAt,
+          transactions: applyRules(j.transactions, rules),
+          errors: j.errors || [],
+        }))
+        setCompletedJobs(jobs)
+      } catch {
+        // server unreachable — show whatever local state we have
       }
     })
   }, [])
 
-  const emojiFor = useCallback((name: string): string => {
-    if (DEFAULT_CATEGORY_EMOJIS[name]) return DEFAULT_CATEGORY_EMOJIS[name]
-    const custom = customCategories.find(c => c.name === name)
-    return custom?.emoji ?? '📌'
-  }, [customCategories])
+  // Poll every active job until it terminates.
+  useEffect(() => {
+    if (activeJobs.length === 0) return
 
-  const pickerCategories = useMemo(() => {
+    let cancelled = false
+
+    const tick = async () => {
+      if (cancelled) return
+      const snapshot = activeJobs
+
+      const results = await Promise.allSettled(
+        snapshot.map(j =>
+          fetch(`/api/parse/status?jobId=${encodeURIComponent(j.jobId)}`, { cache: 'no-store' })
+            .then(r => r.json())
+        )
+      )
+      if (cancelled) return
+
+      const newCompleted: CompletedJob[] = []
+      const newErrors: { file: string; error: string }[] = []
+      const finishedIds = new Set<string>()
+
+      results.forEach((res, i) => {
+        const job = snapshot[i]
+        if (res.status !== 'fulfilled') return
+        const data = res.value
+
+        if (data.status === 'done') {
+          finishedIds.add(job.jobId)
+          newCompleted.push({
+            id: job.jobId,
+            fileNames: data.fileNames || job.fileNames,
+            completedAt: data.completedAt || Date.now(),
+            transactions: applyRules((data.transactions || []) as Transaction[], merchantRules),
+            errors: data.errors || [],
+          })
+        } else if (data.status === 'error' || data.status === 'missing') {
+          finishedIds.add(job.jobId)
+          newErrors.push({
+            file: job.fileNames.join(', '),
+            error: data.message || data.error || 'Job failed',
+          })
+        }
+      })
+
+      if (finishedIds.size === 0) return
+
+      setCompletedJobs(prev => {
+        const seen = new Set(prev.map(j => j.id))
+        const adds = newCompleted.filter(j => !seen.has(j.id))
+        return [...adds, ...prev]
+      })
+      setActiveJobs(prev => {
+        const next = prev.filter(j => !finishedIds.has(j.jobId))
+        saveActiveJobs(next)
+        if (next.length === 0) setResumed(false)
+        return next
+      })
+      if (newErrors.length > 0) {
+        setErrors(prev => [...prev, ...newErrors])
+      }
+      const hasReviews = newCompleted.some(j => j.transactions.some(t => t.needsReview))
+      if (hasReviews) setReviewOpen(true)
+    }
+
+    tick()
+    const interval = setInterval(tick, POLL_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [activeJobs, merchantRules])
+
+  const emojiFor = (name: string): string => {
+    if (DEFAULT_CATEGORY_EMOJIS[name]) return DEFAULT_CATEGORY_EMOJIS[name]
+    return customCategories.find(c => c.name === name)?.emoji ?? '📌'
+  }
+
+  const pickerCategories = (() => {
     const all = [
       ...DEFAULT_CATEGORIES.filter(c => c !== 'Uncategorized').map(name => ({ name, emoji: DEFAULT_CATEGORY_EMOJIS[name] })),
       ...customCategories.map(c => ({ name: c.name, emoji: c.emoji })),
@@ -88,169 +206,102 @@ export default function Home() {
       seen.add(c.name)
       return true
     })
-  }, [customCategories])
-
-  const applyRulesAndFlag = useCallback((incoming: Transaction[], rules: MerchantRule[]): Transaction[] => {
-    const ruleMap = new Map(rules.map(r => [r.normalizedMerchant, r.category]))
-    return incoming.map(t => {
-      const key = normalizeMerchant(t.description)
-      const ruleCategory = key ? ruleMap.get(key) : undefined
-      if (ruleCategory) {
-        return { ...t, category: ruleCategory, needsReview: false, confidence: 1 }
-      }
-      const isUncertain =
-        t.category === 'Uncategorized' ||
-        (typeof t.confidence === 'number' && t.confidence < CONFIDENCE_THRESHOLD)
-      return { ...t, needsReview: isUncertain }
-    })
-  }, [])
-
-  // Apply a finished job's results to UI state
-  const consumeDoneJob = useCallback(
-    (jobTxns: Transaction[], jobErrors: { file: string; error: string }[], fileNames: string[]) => {
-      const processed = applyRulesAndFlag(jobTxns, merchantRules)
-      const reviewCount = processed.filter(t => t.needsReview).length
-
-      setTransactions(prev => {
-        const existingIds = new Set(prev.map(t => t.id))
-        const newOnes = processed.filter(t => !existingIds.has(t.id))
-        return [...prev, ...newOnes]
-      })
-      setProcessedFiles(prev => [...new Set([...prev, ...fileNames])])
-      if (jobErrors.length > 0) setErrors(jobErrors)
-      if (reviewCount > 0) setReviewOpen(true)
-    },
-    [applyRulesAndFlag, merchantRules]
-  )
-
-  // Poll the active job until it finishes (works in background tabs because
-  // setTimeout still fires, just throttled; resumes naturally on page reload).
-  useEffect(() => {
-    if (!activeJob) return
-
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const jobId = activeJob.jobId
-    const jobFileNames = activeJob.fileNames
-
-    const poll = async () => {
-      if (cancelled) return
-      try {
-        const res = await fetch(
-          `/api/parse/status?jobId=${encodeURIComponent(jobId)}`,
-          { cache: 'no-store' }
-        )
-        if (cancelled) return
-        const data = await res.json().catch(() => ({}))
-
-        if (res.status === 404 || data.status === 'missing') {
-          setErrors([{ file: jobFileNames.join(', '), error: 'Job expired or not found on the server' }])
-          saveActiveJob(null)
-          setActiveJob(null)
-          setResumed(false)
-          return
-        }
-
-        if (data.status === 'done') {
-          consumeDoneJob(
-            (data.transactions || []) as Transaction[],
-            data.errors || [],
-            data.fileNames || jobFileNames
-          )
-          saveActiveJob(null)
-          setActiveJob(null)
-          setResumed(false)
-          return
-        }
-
-        if (data.status === 'error') {
-          setErrors([{ file: jobFileNames.join(', '), error: data.message || 'Job failed' }])
-          saveActiveJob(null)
-          setActiveJob(null)
-          setResumed(false)
-          return
-        }
-
-        timer = setTimeout(poll, POLL_INTERVAL_MS)
-      } catch {
-        if (!cancelled) timer = setTimeout(poll, POLL_BACKOFF_MS)
-      }
-    }
-
-    poll()
-
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [activeJob, consumeDoneJob])
+  })()
 
   const handleUpload = async (files: File[]) => {
-    // Hard guard against double-submit (a second click before the first POST
-    // resolves would otherwise queue a duplicate job server-side).
-    if (submitting || activeJob) return
+    if (submitting || activeJobs.length > 0) return
     setSubmitting(true)
     setErrors([])
 
-    const formData = new FormData()
-    files.forEach(f => formData.append('files', f))
-    if (customCategories.length > 0) {
-      formData.append('extraCategories', JSON.stringify(customCategories.map(c => c.name)))
-    }
+    const extraCategoriesJson =
+      customCategories.length > 0
+        ? JSON.stringify(customCategories.map(c => c.name))
+        : null
 
+    // Per-file POSTs in parallel — each request stays small (~500KB-2MB), well
+    // under Vercel's 4.5MB body cap, and the server runs them concurrently.
     try {
-      const res = await fetch('/api/parse', { method: 'POST', body: formData })
-      const data = await res.json()
+      const results = await Promise.all(
+        files.map(async file => {
+          try {
+            const formData = new FormData()
+            formData.append('files', file)
+            if (extraCategoriesJson) formData.append('extraCategories', extraCategoriesJson)
+            const res = await fetch('/api/parse', { method: 'POST', body: formData })
+            const data = await res.json()
+            if (!res.ok || data.error) {
+              return { ok: false as const, fileName: file.name, error: data.error || `Server returned ${res.status}` }
+            }
+            return {
+              ok: true as const,
+              job: {
+                jobId: data.jobId as string,
+                fileNames: (data.fileNames as string[]) || [file.name],
+                startedAt: Date.now(),
+              },
+            }
+          } catch (err) {
+            return { ok: false as const, fileName: file.name, error: err instanceof Error ? err.message : 'Network error' }
+          }
+        })
+      )
 
-      if (!res.ok || data.error) {
-        setErrors([{ file: 'Upload', error: data.error || `Server returned ${res.status}` }])
-        return
-      }
+      const newJobs: ActiveJob[] = []
+      const submitErrors: { file: string; error: string }[] = []
+      results.forEach(r => {
+        if (r.ok) newJobs.push(r.job)
+        else submitErrors.push({ file: r.fileName, error: r.error })
+      })
 
-      const newJob: ActiveJob = {
-        jobId: data.jobId,
-        fileNames: data.fileNames || files.map(f => f.name),
-        startedAt: Date.now(),
+      if (newJobs.length > 0) {
+        setActiveJobs(prev => {
+          const next = [...prev, ...newJobs]
+          saveActiveJobs(next)
+          return next
+        })
+        setResumed(false)
       }
-      saveActiveJob(newJob)
-      setActiveJob(newJob)
-      setResumed(false)
-    } catch {
-      setErrors([{ file: 'Upload', error: 'Failed to connect to server' }])
+      if (submitErrors.length > 0) setErrors(submitErrors)
     } finally {
       setSubmitting(false)
     }
   }
 
-  const cancelActiveJob = () => {
-    saveActiveJob(null)
-    setActiveJob(null)
+  const cancelAllActive = () => {
+    saveActiveJobs([])
+    setActiveJobs([])
     setResumed(false)
   }
 
-  const clearAll = () => {
-    setTransactions([])
+  const clearAllLocal = () => {
+    // Local-only clear (doesn't delete from DB — user can re-load anytime
+    // or use /history to permanently delete specific analyses).
+    setCompletedJobs([])
     setErrors([])
-    setProcessedFiles([])
     setYearFilter('all')
     setCategoryFilter('all')
   }
 
   const handleAssign = (transactionId: string, category: string, persistRule: boolean) => {
-    const target = transactions.find(t => t.id === transactionId)
+    const target = completedJobs
+      .flatMap(j => j.transactions)
+      .find(t => t.id === transactionId)
     if (!target) return
     const normalized = normalizeMerchant(target.description)
 
-    setTransactions(prev =>
-      prev.map(t => {
-        if (t.id === transactionId) {
-          return { ...t, category, needsReview: false, confidence: 1 }
-        }
-        if (persistRule && normalized && normalizeMerchant(t.description) === normalized) {
-          return { ...t, category, needsReview: false, confidence: 1 }
-        }
-        return t
-      })
+    setCompletedJobs(prev =>
+      prev.map(job => ({
+        ...job,
+        transactions: job.transactions.map(t => {
+          if (t.id === transactionId) {
+            return { ...t, category, needsReview: false, confidence: 1 }
+          }
+          if (persistRule && normalized && normalizeMerchant(t.description) === normalized) {
+            return { ...t, category, needsReview: false, confidence: 1 }
+          }
+          return t
+        }),
+      }))
     )
 
     if (persistRule && normalized) {
@@ -279,13 +330,17 @@ export default function Home() {
     })
   }
 
+  // Derived state
+  const allTransactions = completedJobs.flatMap(j => j.transactions)
+  const processedFiles = [...new Set(completedJobs.flatMap(j => j.fileNames))]
+
   const years = [...new Set(
-    transactions
+    allTransactions
       .map(t => t.date?.slice(0, 4))
       .filter(y => y && y !== 'unkn' && /^\d{4}$/.test(y))
   )].sort().reverse()
 
-  const filtered = transactions.filter(t => {
+  const filtered = allTransactions.filter(t => {
     if (yearFilter !== 'all' && !t.date?.startsWith(yearFilter)) return false
     if (categoryFilter !== 'all' && t.category !== categoryFilter) return false
     return true
@@ -316,19 +371,40 @@ export default function Home() {
     .reduce((s, c) => s + c.total, 0)
 
   const reviewQueue = filtered.filter(t => t.needsReview)
+  const totalAggregateFiles =
+    activeJobs.reduce((s, j) => s + j.fileNames.length, 0) + processedFiles.length
 
   const exportAll = () => {
     const rows = [
       ['Date', 'Description', 'Amount', 'Category', 'Subcategory', 'Source'],
       ...filtered.map(t => [t.date, t.description, t.amount.toFixed(2), t.category, t.subcategory || '', t.source]),
     ]
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `transactions_${yearFilter !== 'all' ? yearFilter : 'all'}.csv`
-    a.click()
+    downloadCSV(rows, `transactions_${yearFilter !== 'all' ? yearFilter : 'all'}.csv`)
+  }
+
+  // Tax-preparer-friendly export: one row per transaction with a Schedule C
+  // line column. Sorted by tax line so it's easy to total per bucket.
+  const exportForTax = () => {
+    const sorted = [...filtered].sort((a, b) => {
+      const taxA = TAX_LINE[a.category] || 'Review'
+      const taxB = TAX_LINE[b.category] || 'Review'
+      if (taxA !== taxB) return taxA.localeCompare(taxB)
+      return (a.date || '').localeCompare(b.date || '')
+    })
+
+    const rows = [
+      ['Tax Line', 'Date', 'Description', 'Amount', 'App Category', 'Subcategory', 'Source'],
+      ...sorted.map(t => [
+        TAX_LINE[t.category] || 'Review',
+        t.date,
+        t.description,
+        t.amount.toFixed(2),
+        t.category,
+        t.subcategory || '',
+        t.source,
+      ]),
+    ]
+    downloadCSV(rows, `tax_export_${yearFilter !== 'all' ? yearFilter : 'all'}.csv`)
   }
 
   return (
@@ -339,37 +415,48 @@ export default function Home() {
             <h1 className="text-3xl font-bold text-gray-900">Statement Analyzer</h1>
             <p className="text-gray-500 mt-1">Upload bank statements & Amazon orders — AI categorizes everything for taxes</p>
           </div>
-          {merchantRules.length > 0 && (
-            <div className="text-xs text-gray-400 text-right">
-              <p>{merchantRules.length} merchant rule{merchantRules.length === 1 ? '' : 's'} saved</p>
-              <p>{customCategories.length} custom categor{customCategories.length === 1 ? 'y' : 'ies'}</p>
-            </div>
-          )}
+          <div className="flex items-center gap-3 flex-wrap">
+            <Link
+              href="/history"
+              className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 bg-white rounded-lg px-3 py-2"
+            >
+              <History size={14} />
+              History
+            </Link>
+            {(merchantRules.length > 0 || customCategories.length > 0) && (
+              <div className="text-xs text-gray-400 text-right">
+                <p>{merchantRules.length} merchant rule{merchantRules.length === 1 ? '' : 's'}</p>
+                <p>{customCategories.length} custom categor{customCategories.length === 1 ? 'y' : 'ies'}</p>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 mb-8">
           <UploadZone onUpload={handleUpload} isProcessing={isProcessing} />
 
-          {activeJob && (
+          {activeJobs.length > 0 && (
             <div className="mt-4 flex items-start justify-between gap-3 bg-blue-50 border border-blue-200 rounded-xl p-4">
               <div className="flex items-start gap-2 min-w-0">
                 <RefreshCw size={16} className="text-blue-600 animate-spin mt-0.5 shrink-0" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-blue-900">
-                    {resumed ? 'Resuming your previous upload…' : 'Reading and categorizing with AI…'}
+                    {resumed
+                      ? `Resuming ${activeJobs.length} upload${activeJobs.length === 1 ? '' : 's'}…`
+                      : `Processing ${activeJobs.length} file${activeJobs.length === 1 ? '' : 's'} with AI…`}
                   </p>
                   <p className="text-xs text-blue-700/80 mt-0.5 break-words">
-                    {activeJob.fileNames.join(', ')}
+                    {activeJobs.flatMap(j => j.fileNames).join(', ')}
                   </p>
                   <p className="text-xs text-blue-700/60 mt-1">
-                    Safe to switch tabs or close this one — the work keeps running. Come back and your results will be here.
+                    Safe to switch tabs or close this one — work keeps running on the server. Results appear here when ready.
                   </p>
                 </div>
               </div>
               <button
-                onClick={cancelActiveJob}
+                onClick={cancelAllActive}
                 className="text-blue-600 hover:text-blue-900 text-xs flex items-center gap-1 shrink-0"
-                title="Stop watching this job (it'll keep running on the server but the result will be dropped)"
+                title="Stop watching all in-flight jobs"
               >
                 <X size={14} />
                 Stop watching
@@ -389,7 +476,7 @@ export default function Home() {
           )}
         </div>
 
-        {transactions.length > 0 && (
+        {completedJobs.length > 0 && (
           <>
             <ReviewBanner count={reviewQueue.length} onOpen={() => setReviewOpen(true)} />
 
@@ -448,26 +535,36 @@ export default function Home() {
                   </button>
                 )}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={exportForTax}
+                  className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-4 py-2 transition-colors"
+                  title="CSV grouped by Schedule C line — ready for your tax preparer"
+                >
+                  <Download size={14} />
+                  Tax Export
+                </button>
                 <button
                   onClick={exportAll}
                   className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 bg-white rounded-lg px-4 py-2 transition-colors"
                 >
                   <Download size={14} />
-                  Export All CSV
+                  CSV
                 </button>
                 <button
-                  onClick={clearAll}
+                  onClick={clearAllLocal}
                   className="text-sm text-red-500 hover:text-red-700 border border-red-200 bg-white rounded-lg px-4 py-2 transition-colors"
+                  title="Hide all loaded analyses from this view (data still in History — go there to permanently delete)"
                 >
-                  Clear All
+                  Hide All
                 </button>
               </div>
             </div>
 
             {processedFiles.length > 0 && (
               <p className="text-xs text-gray-400 mb-4">
-                Loaded from: {processedFiles.join(', ')}
+                Showing {totalAggregateFiles} file{totalAggregateFiles === 1 ? '' : 's'} from {completedJobs.length} analys{completedJobs.length === 1 ? 'is' : 'es'}.{' '}
+                <Link href="/history" className="underline hover:text-gray-600">Manage in History →</Link>
               </p>
             )}
 
@@ -496,4 +593,15 @@ export default function Home() {
       />
     </div>
   )
+}
+
+function downloadCSV(rows: string[][], filename: string) {
+  const csv = rows.map(r => r.map(c => `"${(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }

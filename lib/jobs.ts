@@ -137,6 +137,40 @@ export async function readJob(id: string): Promise<JobStatus | null> {
   return rowToStatus(data as DbRow)
 }
 
+export interface DoneJobSummary {
+  id: string
+  fileNames: string[]
+  completedAt: number
+  transactions: Transaction[]
+  errors: JobError[]
+}
+
+export async function listDoneJobs(): Promise<DoneJobSummary[]> {
+  const client = getClient()
+  if (!client) return []
+  const { data, error } = await client
+    .from('sa_parse_jobs')
+    .select('id, file_names, updated_at, transactions, errors')
+    .eq('status', 'done')
+    .order('updated_at', { ascending: false })
+    .limit(500)
+  if (error || !data) return []
+  return (data as Array<Pick<DbRow, 'id' | 'file_names' | 'updated_at' | 'transactions' | 'errors'>>).map(row => ({
+    id: row.id,
+    fileNames: row.file_names ?? [],
+    completedAt: new Date(row.updated_at).getTime(),
+    transactions: row.transactions ?? [],
+    errors: row.errors ?? [],
+  }))
+}
+
+export async function deleteJob(id: string): Promise<boolean> {
+  const client = getClient()
+  if (!client) return false
+  const { error } = await client.from('sa_parse_jobs').delete().eq('id', id)
+  return !error
+}
+
 export function dbConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
 }

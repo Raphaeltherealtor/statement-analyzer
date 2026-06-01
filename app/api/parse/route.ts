@@ -81,6 +81,21 @@ Category rules:
 - Truly unrecognizable merchants or ambiguous descriptors → "Uncategorized"
 - Recognizable but doesn't fit any bucket above → "Other"
 
+Amazon order history files (PDF or Excel) are special — they list individual products bought, not a single charge. When the input looks like an Amazon order export:
+- Create ONE transaction per line item (per product), not per order
+- description: the actual product name (e.g. "Anker USB-C Charger 60W")
+- subcategory: a short label for the item (e.g. "USB-C Charger")
+- category: pick based on the product itself, NOT the fact that it came from Amazon. Examples:
+    - Cables, chargers, electronics, monitors, hard drives, keyboards, headphones, software licenses → "Office & Business"
+    - Books for work or business courses → "Education"
+    - Office supplies (paper, pens, organizers, desk gear) → "Office & Business"
+    - Household items, kitchen, decor, toys → "Shopping & Retail"
+    - Clothing, shoes → "Clothing"
+    - Pet products → "Pets"
+    - Health/wellness, vitamins → "Medical & Health"
+    - Truly unrecognizable → "Amazon"
+- amount: the per-item price (not the order total). If only an order total is shown, use that with the description listing all items.
+
 Return ONLY a valid JSON array with no markdown or explanation:
 [
   {
