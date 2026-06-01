@@ -11,22 +11,6 @@ export const maxDuration = 60
 
 const client = new Anthropic()
 
-async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const PDFParser = require('pdf2json')
-  return new Promise((resolve, reject) => {
-    const parser = new PDFParser()
-    parser.on('pdfParser_dataError', (err: { parserError: Error }) => reject(err.parserError))
-    parser.on('pdfParser_dataReady', (data: { Pages: Array<{ Texts: Array<{ R: Array<{ T: string }> }> }> }) => {
-      const text = data.Pages.map((page) =>
-        page.Texts.map((t) => t.R.map((r) => decodeURIComponent(r.T)).join('')).join(' ')
-      ).join('\n')
-      resolve(text)
-    })
-    parser.parseBuffer(buffer)
-  })
-}
-
 async function parseCSVorExcel(buffer: Buffer): Promise<string> {
   const XLSX = await import('xlsx')
   const workbook = XLSX.read(buffer, { type: 'buffer' })
@@ -40,18 +24,9 @@ async function parseCSVorExcel(buffer: Buffer): Promise<string> {
   return text
 }
 
-async function categorizeWithClaude(
-  rawText: string,
-  filename: string,
-  extraCategories: string[],
-): Promise<Transaction[]> {
-  const allCategories = [...DEFAULT_CATEGORIES, ...extraCategories.filter(c => !DEFAULT_CATEGORIES.includes(c))]
-
-  const customLine = extraCategories.length
-    ? `\nThe user has also defined custom categories: ${extraCategories.join(', ')}. Use one of these if it clearly fits a transaction.\n`
-    : ''
-
-  const prompt = `You are a financial transaction parser. Extract ALL transactions from this bank/financial statement text and return them as JSON.
+// Static parser instructions — identical for every call. Marked with
+// cache_control below so Anthropic can reuse the prefix across requests.
+const PARSER_RULES = `You are a financial transaction parser. Extract ALL transactions from this bank/financial statement and return them as JSON.
 
 For each transaction return:
 - date: "YYYY-MM-DD" (or "unknown")
@@ -67,9 +42,9 @@ Confidence rubric:
 - 0.6  — weak guess
 - < 0.6 — set category to "Uncategorized" instead
 
-Allowed categories (use ONLY these strings):
-${allCategories.join(', ')}
-${customLine}
+Allowed categories (use ONLY these strings, plus any extra ones provided after this block):
+${DEFAULT_CATEGORIES.join(', ')}
+
 Category rules:
 - Gas stations (Costco Gas, Arco, Shell, Chevron, 76, BP, Mobil, Valero, ExxonMobil) → "Gas & Fuel"
 - Supermarkets (Trader Joe's, Whole Foods, Safeway, Ralphs, Vons, Sprouts, H-Mart, Aldi) → "Groceries"
@@ -118,24 +93,64 @@ Return ONLY a valid JSON array with no markdown or explanation:
   }
 ]
 
-Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BALANCE" entries.
+Skip balance lines, headers, summary rows, and "BEGINNING BALANCE" / "ENDING BALANCE" entries.`
 
-Statement text:
-${rawText.slice(0, 80000)}`
+type CategorizeInput =
+  | { kind: 'pdf'; pdfBase64: string; filename: string }
+  | { kind: 'text'; text: string; filename: string }
 
-  // Haiku 4.5 is dramatically faster than Sonnet/Opus on structured extraction
-  // and is the only Claude tier consistently completing inside Vercel's 60s
-  // serverless cap on real multi-page statements.
+async function categorizeWithClaude(
+  input: CategorizeInput,
+  extraCategories: string[],
+): Promise<Transaction[]> {
+  // Build content blocks. cache_control on the static rules block lets the
+  // API reuse the parsed prefix across calls (helps once the user has run
+  // a few uploads).
+  const content: Anthropic.Messages.ContentBlockParam[] = [
+    {
+      type: 'text',
+      text: PARSER_RULES,
+      cache_control: { type: 'ephemeral' },
+    },
+  ]
+
+  if (extraCategories.length > 0) {
+    content.push({
+      type: 'text',
+      text: `Additional user-defined categories you may also use when they clearly fit: ${extraCategories.join(', ')}`,
+    })
+  }
+
+  if (input.kind === 'pdf') {
+    content.push({
+      type: 'document',
+      source: {
+        type: 'base64',
+        media_type: 'application/pdf',
+        data: input.pdfBase64,
+      },
+    })
+    content.push({
+      type: 'text',
+      text: `Parse the PDF above (filename: ${input.filename}). Return the JSON array now, with no preamble.`,
+    })
+  } else {
+    content.push({
+      type: 'text',
+      text: `Statement text (filename: ${input.filename}):\n\n${input.text.slice(0, 80000)}\n\nReturn the JSON array now, with no preamble.`,
+    })
+  }
+
   const message = await client.messages.create({
     model: 'claude-haiku-4-5',
     max_tokens: 8192,
-    messages: [{ role: 'user', content: prompt }],
+    messages: [{ role: 'user', content }],
   })
 
-  const content = message.content[0]
-  if (content.type !== 'text') throw new Error('Unexpected response type')
+  const first = message.content[0]
+  if (first.type !== 'text') throw new Error('Unexpected response type')
 
-  const text = content.text.trim()
+  const text = first.text.trim()
   const jsonMatch = text.match(/\[[\s\S]*\]/)
   if (!jsonMatch) throw new Error('No JSON array found in response')
 
@@ -156,7 +171,7 @@ ${rawText.slice(0, 80000)}`
     category: t.category || 'Uncategorized',
     subcategory: t.subcategory,
     confidence: typeof t.confidence === 'number' ? t.confidence : undefined,
-    source: filename,
+    source: input.filename,
   })) as Transaction[]
 }
 
@@ -172,18 +187,25 @@ async function runFiles(
     fileData.map(async (f): Promise<{ transactions: Transaction[]; error: JobError | null }> => {
       try {
         const ext = f.name.split('.').pop()?.toLowerCase()
-        let rawText = ''
 
-        if (ext === 'pdf') rawText = await extractTextFromPDF(f.buffer)
-        else if (ext === 'csv') rawText = f.buffer.toString('utf-8')
-        else if (ext === 'xlsx' || ext === 'xls') rawText = await parseCSVorExcel(f.buffer)
-        else return { transactions: [], error: { file: f.name, error: 'Unsupported file type' } }
-
-        if (!rawText.trim()) {
-          return { transactions: [], error: { file: f.name, error: 'Could not extract text from file' } }
+        let input: CategorizeInput
+        if (ext === 'pdf') {
+          // Send the PDF straight to Claude — native document input preserves
+          // table layout (date/desc/amount columns) that pdf2json flattened.
+          input = { kind: 'pdf', pdfBase64: f.buffer.toString('base64'), filename: f.name }
+        } else if (ext === 'csv') {
+          const text = f.buffer.toString('utf-8')
+          if (!text.trim()) return { transactions: [], error: { file: f.name, error: 'CSV is empty' } }
+          input = { kind: 'text', text, filename: f.name }
+        } else if (ext === 'xlsx' || ext === 'xls') {
+          const text = await parseCSVorExcel(f.buffer)
+          if (!text.trim()) return { transactions: [], error: { file: f.name, error: 'Spreadsheet is empty' } }
+          input = { kind: 'text', text, filename: f.name }
+        } else {
+          return { transactions: [], error: { file: f.name, error: 'Unsupported file type' } }
         }
 
-        const transactions = await categorizeWithClaude(rawText, f.name, extraCategories)
+        const transactions = await categorizeWithClaude(input, extraCategories)
         return { transactions, error: null }
       } catch (err) {
         return {
