@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server'
-import { readJob, blobConfigured } from '@/lib/jobs'
+import { readJob, dbConfigured } from '@/lib/jobs'
 
 export async function GET(request: NextRequest) {
-  if (!blobConfigured()) {
+  if (!dbConfigured()) {
     return Response.json(
-      { error: 'Vercel Blob is not enabled. Connect Blob storage in the Vercel dashboard.' },
+      { error: 'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel project env vars.' },
       { status: 500 }
     )
   }

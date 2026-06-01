@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
 import { Transaction, DEFAULT_CATEGORIES } from '@/lib/types'
-import { writeJob, blobConfigured, JobError } from '@/lib/jobs'
+import { createJob, completeJob, failJob, dbConfigured, JobError } from '@/lib/jobs'
 import { randomUUID } from 'crypto'
 
 // Even though we return early via waitUntil, the function must stay alive until
@@ -162,7 +162,6 @@ async function processJob(
   fileData: Array<{ name: string; buffer: Buffer }>,
   extraCategories: string[],
 ) {
-  const fileNames = fileData.map(f => f.name)
   try {
     const results = await Promise.all(
       fileData.map(async (f): Promise<{ transactions: Transaction[]; error: JobError | null }> => {
@@ -193,27 +192,16 @@ async function processJob(
     const transactions = results.flatMap(r => r.transactions)
     const errors = results.flatMap(r => (r.error ? [r.error] : []))
 
-    await writeJob(jobId, {
-      status: 'done',
-      transactions,
-      errors,
-      fileNames,
-      completedAt: Date.now(),
-    })
+    await completeJob(jobId, transactions, errors)
   } catch (err) {
-    await writeJob(jobId, {
-      status: 'error',
-      message: err instanceof Error ? err.message : 'Unknown error',
-      fileNames,
-      failedAt: Date.now(),
-    })
+    await failJob(jobId, err instanceof Error ? err.message : 'Unknown error')
   }
 }
 
 export async function POST(request: NextRequest) {
-  if (!blobConfigured()) {
+  if (!dbConfigured()) {
     return Response.json(
-      { error: 'Vercel Blob is not enabled. Connect Blob storage in the Vercel dashboard so jobs can be persisted.' },
+      { error: 'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel project env vars.' },
       { status: 500 }
     )
   }
@@ -241,19 +229,14 @@ export async function POST(request: NextRequest) {
     const fileData = await Promise.all(
       files.map(async f => ({ name: f.name, buffer: Buffer.from(await f.arrayBuffer()) }))
     )
+    const fileNames = fileData.map(f => f.name)
 
-    const jobId = randomUUID()
-
-    await writeJob(jobId, {
-      status: 'processing',
-      createdAt: Date.now(),
-      fileNames: fileData.map(f => f.name),
-    })
+    const jobId = await createJob(fileNames)
 
     // Kick off processing in the background and return immediately
     waitUntil(processJob(jobId, fileData, extraCategories))
 
-    return Response.json({ jobId, fileNames: fileData.map(f => f.name) })
+    return Response.json({ jobId, fileNames })
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : 'Failed to start parse job' },
