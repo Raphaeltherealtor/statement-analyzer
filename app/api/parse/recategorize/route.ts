@@ -6,9 +6,16 @@ export const maxDuration = 60
 
 const client = new Anthropic()
 
-// Hard cap — keeps a single call within Haiku's output budget and the function
-// timeout. ~500 transactions is well over a year of statements for most users.
-const MAX_TRANSACTIONS_PER_CALL = 500
+// Hard cap chosen to stay comfortably inside the 60s function timeout.
+// 100 transactions × ~30 output tokens each ≈ 3K tokens; Haiku finishes
+// that in ~30-40s with margin. Bigger batches were timing out at the
+// edge.
+const MAX_TRANSACTIONS_PER_CALL = 100
+
+// Race the Anthropic call against this so we throw a clean error before
+// Vercel kills the function instead of leaving the client with a reset
+// connection.
+const SOFT_TIMEOUT_MS = 55_000
 
 // Reuses the same rule structure as the PDF parser, but framed as
 // classification-only ("here are existing transactions, re-bucket them")
@@ -142,17 +149,22 @@ export async function POST(request: NextRequest) {
     : ''
 
   try {
-    const message = await client.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 16384,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: CLASSIFY_RULES, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: `${extrasNote}\nTransactions to classify:\n${lines}\n\nReturn the JSON array now.` },
-        ],
-      }],
-    })
+    const message = await Promise.race([
+      client.messages.create({
+        model: 'claude-haiku-4-5',
+        max_tokens: 16384,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: CLASSIFY_RULES, cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: `${extrasNote}\nTransactions to classify:\n${lines}\n\nReturn the JSON array now.` },
+          ],
+        }],
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Re-categorize exceeded 55s — try a smaller batch')), SOFT_TIMEOUT_MS)
+      ),
+    ])
 
     const first = message.content[0]
     if (first.type !== 'text') throw new Error('Unexpected response type')

@@ -14,6 +14,7 @@ export interface RecategorizeProposal {
 interface RecategorizePreviewProps {
   onClose: () => void
   loading: boolean
+  progress?: { done: number; total: number } | null
   proposals: RecategorizeProposal[] | null
   emojiFor: (name: string) => string
   onApply: (accepted: RecategorizeProposal[]) => void | Promise<void>
@@ -24,6 +25,7 @@ interface RecategorizePreviewProps {
 export default function RecategorizePreview({
   onClose,
   loading,
+  progress,
   proposals,
   emojiFor,
   onApply,
@@ -90,7 +92,22 @@ export default function RecategorizePreview({
           <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
             <RefreshCw size={28} className="text-purple-600 animate-spin mb-3" />
             <p className="text-sm font-medium text-gray-800">AI is reviewing your transactions…</p>
-            <p className="text-xs text-gray-500 mt-1">Usually 10–30 seconds.</p>
+            {progress && progress.total > 0 ? (
+              <>
+                <p className="text-xs text-gray-500 mt-1">
+                  Batch <span className="font-medium text-gray-700">{progress.done}</span> of {progress.total}
+                </p>
+                <div className="w-64 max-w-full mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-purple-600 transition-all duration-500"
+                    style={{ width: `${(progress.done / progress.total) * 100}%` }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400 mt-2">~30 seconds per batch · {progress.total * 30}s total estimate</p>
+              </>
+            ) : (
+              <p className="text-xs text-gray-500 mt-1">Usually 30–60 seconds.</p>
+            )}
           </div>
         ) : !proposals ? (
           <div className="flex-1 flex items-center justify-center p-10 text-gray-400 text-sm">

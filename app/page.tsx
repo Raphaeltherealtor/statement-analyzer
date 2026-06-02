@@ -92,6 +92,7 @@ export default function Home() {
   const [recatOpen, setRecatOpen] = useState(false)
   const [recatLoading, setRecatLoading] = useState(false)
   const [recatProposals, setRecatProposals] = useState<RecategorizeProposal[] | null>(null)
+  const [recatProgress, setRecatProgress] = useState<{ done: number; total: number } | null>(null)
 
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
@@ -379,52 +380,67 @@ export default function Home() {
     setRecatOpen(true)
     setRecatProposals(null)
     setRecatLoading(true)
+    setRecatProgress({ done: 0, total: 0 })
 
-    // Server caps a single call at 500 to stay inside Haiku's output budget,
-    // so chunk client-side and fire batches in parallel. Total wall time is
-    // bounded by the slowest single batch rather than the sum.
-    const BATCH_SIZE = 500
+    // 100 per batch fits Haiku inside the 60s function cap with margin.
+    // PARALLEL_LIMIT keeps us from hammering Anthropic's per-minute rate
+    // limits with a flood of large concurrent calls.
+    const BATCH_SIZE = 100
+    const PARALLEL_LIMIT = 3
     const batches: Transaction[][] = []
     for (let i = 0; i < txns.length; i += BATCH_SIZE) {
       batches.push(txns.slice(i, i + BATCH_SIZE))
     }
+    setRecatProgress({ done: 0, total: batches.length })
 
     const extraCategories = customCategories.map(c => c.name)
 
-    try {
-      const responses = await Promise.all(
-        batches.map(async batch => {
-          try {
-            const res = await fetch('/api/parse/recategorize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                transactions: batch.map(t => ({
-                  id: t.id,
-                  description: t.description,
-                  amount: t.amount,
-                  date: t.date,
-                  currentCategory: t.category,
-                })),
-                extraCategories,
-              }),
-            })
-            const data = await res.json()
-            if (!res.ok || data.error) return { error: data.error || `Server returned ${res.status}` }
-            return { results: data.results as Array<{ id: string; category: string; subcategory?: string; confidence: number }> }
-          } catch {
-            return { error: 'Network error' }
-          }
+    const runBatch = async (batch: Transaction[]) => {
+      try {
+        const res = await fetch('/api/parse/recategorize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            transactions: batch.map(t => ({
+              id: t.id,
+              description: t.description,
+              amount: t.amount,
+              date: t.date,
+              currentCategory: t.category,
+            })),
+            extraCategories,
+          }),
         })
-      )
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || data.error) {
+          return { error: (data.error as string) || `Server returned ${res.status}` }
+        }
+        return {
+          results: data.results as Array<{ id: string; category: string; subcategory?: string; confidence: number }>,
+        }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : 'Network error' }
+      }
+    }
 
-      const failed = responses.filter(r => 'error' in r)
+    try {
+      // Run in waves of PARALLEL_LIMIT so we get parallelism without exceeding
+      // rate limits or flooding the function pool. Each wave updates progress.
+      const responses: Array<{ results?: Array<{ id: string; category: string; subcategory?: string; confidence: number }>; error?: string }> = []
+      for (let i = 0; i < batches.length; i += PARALLEL_LIMIT) {
+        const wave = batches.slice(i, i + PARALLEL_LIMIT)
+        const waveResults = await Promise.all(wave.map(runBatch))
+        responses.push(...waveResults)
+        setRecatProgress({ done: Math.min(i + PARALLEL_LIMIT, batches.length), total: batches.length })
+      }
+
+      const failed = responses.filter(r => r.error)
       if (failed.length > 0) {
+        const firstError = failed[0].error
         setErrors([{
           file: 'AI Re-categorize',
-          error: `${failed.length} of ${batches.length} batch${batches.length === 1 ? '' : 'es'} failed: ${(failed[0] as { error: string }).error}`,
+          error: `${failed.length} of ${batches.length} batch${batches.length === 1 ? '' : 'es'} failed: ${firstError}`,
         }])
-        // Still show proposals for the successful batches if any
         if (failed.length === batches.length) {
           setRecatOpen(false)
           return
@@ -433,7 +449,7 @@ export default function Home() {
 
       const byId = new Map<string, { category: string; subcategory?: string; confidence: number }>()
       responses.forEach(r => {
-        if ('results' in r && r.results) {
+        if (r.results) {
           r.results.forEach(item => byId.set(item.id, item))
         }
       })
@@ -448,11 +464,12 @@ export default function Home() {
         }
       })
       setRecatProposals(proposals)
-    } catch {
-      setErrors([{ file: 'AI Re-categorize', error: 'Failed to reach server' }])
+    } catch (err) {
+      setErrors([{ file: 'AI Re-categorize', error: err instanceof Error ? err.message : 'Failed to reach server' }])
       setRecatOpen(false)
     } finally {
       setRecatLoading(false)
+      setRecatProgress(null)
     }
   }
 
@@ -1042,11 +1059,13 @@ export default function Home() {
       {recatOpen && (
         <RecategorizePreview
           loading={recatLoading}
+          progress={recatProgress}
           proposals={recatProposals}
           emojiFor={emojiFor}
           onClose={() => {
             setRecatOpen(false)
             setRecatProposals(null)
+            setRecatProgress(null)
           }}
           onApply={applyRecategorizeProposals}
         />

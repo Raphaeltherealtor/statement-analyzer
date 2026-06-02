@@ -1,6 +1,6 @@
-// v8 — added /tax-checklist with per-year workspace and CPA-formatted
-// printable deduction checklist.
-const CACHE_NAME = 'statement-analyzer-v8'
+// v9 — AI Re-categorize: smaller 100-txn batches throttled to 3 parallel
+// with progress UI, so big datasets don't time out.
+const CACHE_NAME = 'statement-analyzer-v9'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
