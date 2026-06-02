@@ -1,6 +1,8 @@
-// v3 — added search bar + Expenses/Income tab toggle. Increment again on
-// any breaking client change to force the PWA to evict stale bundles.
-const CACHE_NAME = 'statement-analyzer-v3'
+// v4 — added tax-export mode with per-transaction selection + real-estate
+// categories (Marketing, MLS Dues, Brokerage Fees, Lockboxes, Client Gifts,
+// Website, Photography/Video). Increment again on any breaking client
+// change to force the PWA to evict stale bundles.
+const CACHE_NAME = 'statement-analyzer-v4'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {

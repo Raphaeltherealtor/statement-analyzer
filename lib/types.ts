@@ -69,6 +69,16 @@ export const DEFAULT_CATEGORY_EMOJIS: Record<string, string> = {
   'Cash & ATM': '💵',
   'Fees & Interest': '💸',
   'Taxes & Government': '🏛️',
+  // Real-estate / professional-services-specific buckets. Detailed enough
+  // that a tax preparer can map each one to a clean Schedule C line.
+  'Marketing & Advertising': '📣',
+  'MLS & Association Dues': '🏘️',
+  'Brokerage Fees': '🏢',
+  'Lockboxes & Showings': '🔐',
+  'Client Gifts & Closing': '🎁',
+  'Website & Hosting': '🌐',
+  'Photography & Video': '📸',
+  'Continuing Education': '🎓',
   'Other': '📌',
   'Uncategorized': '❓',
 }
@@ -82,12 +92,21 @@ export const POTENTIALLY_DEDUCTIBLE = [
   'Medical & Health',
   'Pharmacy',
   'Education',
+  'Continuing Education',
   'Home & Garden',
   'Charity & Donations',
   'Office & Business',
   'Software & SaaS',
   'Phone & Internet',
   'Automotive',
+  'Marketing & Advertising',
+  'MLS & Association Dues',
+  'Brokerage Fees',
+  'Lockboxes & Showings',
+  'Client Gifts & Closing',
+  'Website & Hosting',
+  'Photography & Video',
+  'Insurance',
 ]
 
 // Maps each app category to the Schedule C (1040) line item a tax preparer
@@ -99,25 +118,39 @@ export const POTENTIALLY_DEDUCTIBLE = [
 // to review — not tax advice. Mixed business/personal use is common; the
 // preparer makes the call.
 export const TAX_LINE: Record<string, string> = {
-  // Schedule C
-  'Gas & Fuel': 'Car and Truck Expenses',
-  'Automotive': 'Car and Truck Expenses',
-  'Rideshare & Taxi': 'Travel',
-  'Travel': 'Travel',
-  'Restaurants': 'Meals (50%)',
-  'Fast Food': 'Meals (50%)',
-  'Coffee Shops': 'Meals (50%)',
-  'Bars & Alcohol': 'Meals (50%)',
-  'Food Delivery': 'Meals (50%)',
-  'Office & Business': 'Office Expense',
-  'Software & SaaS': 'Office Expense',
-  'Phone & Internet': 'Utilities (business %)',
-  'Utilities': 'Utilities (home office %)',
-  'Insurance': 'Insurance',
+  // Schedule C — vehicle
+  'Gas & Fuel': 'Car and Truck Expenses (line 9)',
+  'Automotive': 'Car and Truck Expenses (line 9)',
+
+  // Schedule C — travel & meals
+  'Rideshare & Taxi': 'Travel (line 24a)',
+  'Travel': 'Travel (line 24a)',
+  'Restaurants': 'Meals 50% (line 24b)',
+  'Fast Food': 'Meals 50% (line 24b)',
+  'Coffee Shops': 'Meals 50% (line 24b)',
+  'Bars & Alcohol': 'Meals 50% (line 24b)',
+  'Food Delivery': 'Meals 50% (line 24b)',
+
+  // Schedule C — real estate / professional-services-specific
+  'Marketing & Advertising': 'Advertising (line 8)',
+  'Website & Hosting': 'Advertising (line 8)',
+  'Photography & Video': 'Advertising (line 8)',
+  'Client Gifts & Closing': 'Other — Client Gifts ($25/person cap)',
+  'MLS & Association Dues': 'Dues & Subscriptions (line 27a)',
+  'Brokerage Fees': 'Commissions & Fees (line 10)',
+  'Lockboxes & Showings': 'Other — Real Estate Operations',
+  'Continuing Education': 'Other — Continuing Education',
+
+  // Schedule C — office / overhead
+  'Office & Business': 'Office Expense (line 18)',
+  'Software & SaaS': 'Office Expense (line 18)',
+  'Phone & Internet': 'Utilities — business % (line 25)',
+  'Utilities': 'Utilities — home office % (line 25)',
+  'Insurance': 'Insurance (line 15)',
   'Education': 'Other — Professional Development',
-  'Home & Garden': 'Repairs and Maintenance',
-  'Fees & Interest': 'Interest / Bank Fees',
-  'Amazon': 'Office Expense (review per item)',
+  'Home & Garden': 'Repairs and Maintenance (line 21)',
+  'Fees & Interest': 'Interest / Bank Fees (line 16b/27a)',
+  'Amazon': 'Office Expense — review per item',
 
   // Schedule A (itemized)
   'Medical & Health': 'Schedule A — Medical',

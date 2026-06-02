@@ -79,14 +79,27 @@ Category rules:
 - Transfers between own accounts, Zelle to self, ACH transfers → "Transfers"
 - Auto repair, auto parts, AutoZone, O'Reilly, car wash, DMV registration → "Automotive"
 - Home Depot, Lowe's, Ace Hardware, IKEA, furniture, home improvement → "Home & Garden"
-- Tuition, schools, online courses, Udemy, Coursera, textbooks → "Education"
+- Tuition, schools, general online courses, Udemy, Coursera, textbooks (NOT professional CE) → "Education"
 - Clothing stores, shoe stores, athletic apparel → "Clothing"
 - Vet, Petco, PetSmart, Chewy, pet food, grooming → "Pets"
 - Donations, GoFundMe, nonprofits, churches, religious orgs → "Charity & Donations"
-- Staples, office supplies, coworking, business services → "Office & Business"
+- Staples, office supplies, coworking, generic business services → "Office & Business"
 - ATM withdrawals, cash advances → "Cash & ATM"
 - Bank fees, late fees, overdraft, interest charges, foreign transaction fees → "Fees & Interest"
 - IRS, state tax payments, DMV, passport, government fees → "Taxes & Government"
+
+Real-estate / professional-services specific rules (prefer these over the generic Office/SaaS buckets when they fit):
+- Postcard mailers (THANKS.IO, Click2Mail), business cards (VistaPrint, MOO), Zillow/Realtor.com/Trulia/Homes.com lead ads, social ads (Meta, TikTok, Google Ads), email marketing (Mailchimp, ActiveCampaign, ConvertKit), video marketing tools (Pictory, Veed, Descript), Canva → "Marketing & Advertising"
+- REALTOR ASSOCIATION, MLS subscriptions, CRMLS, NAR/CAR/NWMLS/state real estate board dues → "MLS & Association Dues"
+- eXp Realty fees (PLD, eXp World, eXpand Mentor), Compass / Keller Williams / Coldwell transaction fees, E&O insurance billed by brokerage, broker desk fees → "Brokerage Fees"
+- Supra Real Estate (SUPRA RE), lockbox keys, eKey services, showing services (ShowingTime, Aligned Showings), PacificCoast Agent → "Lockboxes & Showings"
+- Client closing gifts, client appreciation, thank-you cards, gift baskets when clearly tied to clients → "Client Gifts & Closing"
+- Squarespace (SQSP), WordPress, Wix, GoDaddy, Google Domains (g.co/helppay#), Bluehost, Cloudflare → "Website & Hosting"
+- Professional photo shoots, drone services, virtual tour services (Matterport, iGuide, Asteroom), photo editing subs (Lightroom, BoxBrownie) → "Photography & Video"
+- State CE / license renewal for an active profession (real estate, mortgage, insurance CE) → "Continuing Education"
+
+Generic productivity tools that AREN'T marketing or website-specific (Microsoft 365, Google Workspace, GitHub, OpenAI/ChatGPT, Adobe (non-Lightroom), Everlance, Notion, password managers) → "Software & SaaS"
+
 - Truly unrecognizable merchants or ambiguous descriptors → "Uncategorized"
 - Recognizable but doesn't fit any bucket above → "Other"
 
