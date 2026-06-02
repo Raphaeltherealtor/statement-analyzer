@@ -75,6 +75,7 @@ export default function Home() {
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [editingTxn, setEditingTxn] = useState<Transaction | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [resumed, setResumed] = useState(false)
 
@@ -289,20 +290,38 @@ export default function Home() {
     if (!target) return
     const normalized = normalizeMerchant(target.description)
 
-    setCompletedJobs(prev =>
-      prev.map(job => ({
-        ...job,
-        transactions: job.transactions.map(t => {
-          if (t.id === transactionId) {
-            return { ...t, category, needsReview: false, confidence: 1 }
-          }
-          if (persistRule && normalized && normalizeMerchant(t.description) === normalized) {
-            return { ...t, category, needsReview: false, confidence: 1 }
-          }
-          return t
-        }),
-      }))
-    )
+    const changedJobIds = new Set<string>()
+    const updatedJobs = completedJobs.map(job => {
+      let touched = false
+      const newTxns = job.transactions.map(t => {
+        if (t.id === transactionId) {
+          touched = true
+          return { ...t, category, needsReview: false, confidence: 1 }
+        }
+        if (persistRule && normalized && normalizeMerchant(t.description) === normalized) {
+          touched = true
+          return { ...t, category, needsReview: false, confidence: 1 }
+        }
+        return t
+      })
+      if (touched) changedJobIds.add(job.id)
+      return touched ? { ...job, transactions: newTxns } : job
+    })
+
+    setCompletedJobs(updatedJobs)
+
+    // Persist each affected job's transactions back to Supabase so the edit
+    // survives reload. Fire-and-forget — the optimistic UI update is the
+    // source of truth for the rest of this session.
+    updatedJobs
+      .filter(j => changedJobIds.has(j.id))
+      .forEach(j => {
+        fetch(`/api/parse/jobs?jobId=${encodeURIComponent(j.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ transactions: j.transactions }),
+        }).catch(() => {})
+      })
 
     if (persistRule && normalized) {
       setMerchantRules(prev => {
@@ -570,7 +589,11 @@ export default function Home() {
 
             <div className="space-y-3">
               {categories.map(cat => (
-                <CategoryCard key={cat.name} category={cat} />
+                <CategoryCard
+                  key={cat.name}
+                  category={cat}
+                  onEditTransaction={setEditingTxn}
+                />
               ))}
             </div>
 
@@ -584,12 +607,16 @@ export default function Home() {
       </div>
 
       <ReviewPanel
-        open={reviewOpen}
-        onClose={() => setReviewOpen(false)}
-        queue={reviewQueue}
+        open={reviewOpen || editingTxn !== null}
+        onClose={() => {
+          setReviewOpen(false)
+          setEditingTxn(null)
+        }}
+        queue={editingTxn ? [editingTxn] : reviewQueue}
         knownCategories={pickerCategories}
         onAssign={handleAssign}
         onCreateCategory={handleCreateCategory}
+        singleMode={editingTxn !== null}
       />
     </div>
   )

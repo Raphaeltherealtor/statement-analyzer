@@ -30,7 +30,16 @@ const PARSER_RULES = `You are a financial transaction parser. Extract ALL transa
 
 For each transaction return:
 - date: "YYYY-MM-DD" (or "unknown")
-- description: the merchant name as it appears, cleaned up (drop POS DEBIT / SQ * / TST * style prefixes)
+- description: the ACTUAL merchant or payee. Strip bank-level wrappers
+  (POS DEBIT, DEBIT CARD PURCHASE, CHECK CARD, ACH, etc.), but for
+  pass-through processors the REAL merchant is the part AFTER the asterisk —
+  use that, NEVER leave the description as just the processor name:
+    "PAYPAL *GOOGLE YOUTUBE" → "Google YouTube"
+    "SQ *DUTCH BROS COFFEE"  → "Dutch Bros Coffee"
+    "TST* RANCHO CUCAMONGA"  → "Rancho Cucamonga" (restaurant on Toast)
+    "PP *EVERLANCE"          → "Everlance"
+  If the description is literally just "PAYPAL" with no merchant, keep it
+  as "PayPal" (the user will recategorize individually).
 - amount: positive = money spent, negative = money received (credits, deposits, refunds)
 - category: best match from the list below — pick "Uncategorized" if you are not confident
 - subcategory: short brand/merchant name (e.g. "Starbucks", "Costco Gas")

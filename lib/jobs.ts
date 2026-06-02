@@ -171,6 +171,19 @@ export async function deleteJob(id: string): Promise<boolean> {
   return !error
 }
 
+export async function updateJobTransactions(
+  id: string,
+  transactions: Transaction[]
+): Promise<boolean> {
+  const client = getClient()
+  if (!client) return false
+  const { error } = await client
+    .from('sa_parse_jobs')
+    .update({ transactions, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  return !error
+}
+
 export function dbConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
 }

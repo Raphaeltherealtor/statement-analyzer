@@ -1,14 +1,15 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, Download } from 'lucide-react'
-import { Category } from '@/lib/types'
+import { ChevronDown, ChevronUp, Download, Pencil } from 'lucide-react'
+import { Category, Transaction } from '@/lib/types'
 
 interface CategoryCardProps {
   category: Category
+  onEditTransaction?: (txn: Transaction) => void
 }
 
-export default function CategoryCard({ category }: CategoryCardProps) {
+export default function CategoryCard({ category, onEditTransaction }: CategoryCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'name'>('date')
   const [filterText, setFilterText] = useState('')
@@ -132,8 +133,8 @@ export default function CategoryCard({ category }: CategoryCardProps) {
           {/* Transaction list */}
           <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
             {sorted.map(t => (
-              <div key={t.id} className="px-5 py-2.5 flex items-center justify-between hover:bg-gray-50">
-                <div className="min-w-0">
+              <div key={t.id} className="px-5 py-2.5 flex items-center justify-between gap-2 hover:bg-gray-50 group">
+                <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-gray-800 truncate">{t.description}</p>
                   <div className="flex gap-2 mt-0.5">
                     <p className="text-xs text-gray-400">{t.date}</p>
@@ -143,9 +144,18 @@ export default function CategoryCard({ category }: CategoryCardProps) {
                     <p className="text-xs text-gray-300">{t.source}</p>
                   </div>
                 </div>
-                <span className={`text-sm font-semibold ml-4 shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
                   {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
                 </span>
+                {onEditTransaction && (
+                  <button
+                    onClick={e => { e.stopPropagation(); onEditTransaction(t) }}
+                    className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
+                    title="Move to a different category"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
               </div>
             ))}
             {sorted.length === 0 && (

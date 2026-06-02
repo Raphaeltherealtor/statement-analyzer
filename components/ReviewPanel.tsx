@@ -11,6 +11,10 @@ interface ReviewPanelProps {
   knownCategories: { name: string; emoji: string }[]
   onAssign: (transactionId: string, category: string, persistRule: boolean) => void
   onCreateCategory: (cat: CustomCategory) => void
+  // Single-transaction edit mode: panel shows one txn, auto-closes after
+  // assign, hides the queue/skip UI, defaults persistRule off (since one
+  // ad-hoc move usually shouldn't create a global rule).
+  singleMode?: boolean
 }
 
 const QUICK_EMOJIS = ['📌', '🏷️', '💵', '🛍️', '🍽️', '🚗', '🏠', '🎁', '💼', '✈️', '🎉', '⚡']
@@ -22,8 +26,9 @@ export default function ReviewPanel({
   knownCategories,
   onAssign,
   onCreateCategory,
+  singleMode = false,
 }: ReviewPanelProps) {
-  const [persistRule, setPersistRule] = useState(true)
+  const [persistRule, setPersistRule] = useState(!singleMode)
   const [showNewForm, setShowNewForm] = useState(false)
   const [newName, setNewName] = useState('')
   const [newEmoji, setNewEmoji] = useState('📌')
@@ -55,6 +60,7 @@ export default function ReviewPanel({
     if (!current) return
     onAssign(current.id, categoryName, persistRule)
     resetPickerForm()
+    if (singleMode) onClose()
   }
 
   const handleCreateAndPick = () => {
@@ -84,14 +90,18 @@ export default function ReviewPanel({
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Categorize transactions</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {visible.length > 0
-                ? `${visible.length} left to categorize${skippedCount ? ` · ${skippedCount} skipped` : ''}`
-                : skippedCount > 0
-                  ? `${skippedCount} skipped`
-                  : 'All caught up'}
-            </p>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {singleMode ? 'Move to another category' : 'Categorize transactions'}
+            </h2>
+            {!singleMode && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {visible.length > 0
+                  ? `${visible.length} left to categorize${skippedCount ? ` · ${skippedCount} skipped` : ''}`
+                  : skippedCount > 0
+                    ? `${skippedCount} skipped`
+                    : 'All caught up'}
+              </p>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -259,13 +269,15 @@ export default function ReviewPanel({
                 />
                 Remember <span className="font-medium">{current.subcategory || current.description}</span> for next time
               </label>
-              <button
-                onClick={handleSkip}
-                className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 border border-gray-200 rounded-lg px-3 py-1.5"
-              >
-                <SkipForward size={14} />
-                Skip for now
-              </button>
+              {!singleMode && (
+                <button
+                  onClick={handleSkip}
+                  className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800 border border-gray-200 rounded-lg px-3 py-1.5"
+                >
+                  <SkipForward size={14} />
+                  Skip for now
+                </button>
+              )}
             </div>
           </>
         )}
