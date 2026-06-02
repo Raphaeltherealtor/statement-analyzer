@@ -1,5 +1,6 @@
-// v6 — added AI Re-categorize button + preview modal.
-const CACHE_NAME = 'statement-analyzer-v6'
+// v7 — client-side batching for AI Re-categorize so >500 transactions
+// auto-chunk into parallel API calls.
+const CACHE_NAME = 'statement-analyzer-v7'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {

@@ -379,31 +379,62 @@ export default function Home() {
     setRecatProposals(null)
     setRecatLoading(true)
 
+    // Server caps a single call at 500 to stay inside Haiku's output budget,
+    // so chunk client-side and fire batches in parallel. Total wall time is
+    // bounded by the slowest single batch rather than the sum.
+    const BATCH_SIZE = 500
+    const batches: Transaction[][] = []
+    for (let i = 0; i < txns.length; i += BATCH_SIZE) {
+      batches.push(txns.slice(i, i + BATCH_SIZE))
+    }
+
+    const extraCategories = customCategories.map(c => c.name)
+
     try {
-      const res = await fetch('/api/parse/recategorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transactions: txns.map(t => ({
-            id: t.id,
-            description: t.description,
-            amount: t.amount,
-            date: t.date,
-            currentCategory: t.category,
-          })),
-          extraCategories: customCategories.map(c => c.name),
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok || data.error) {
-        setErrors([{ file: 'AI Re-categorize', error: data.error || `Server returned ${res.status}` }])
-        setRecatOpen(false)
-        return
+      const responses = await Promise.all(
+        batches.map(async batch => {
+          try {
+            const res = await fetch('/api/parse/recategorize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                transactions: batch.map(t => ({
+                  id: t.id,
+                  description: t.description,
+                  amount: t.amount,
+                  date: t.date,
+                  currentCategory: t.category,
+                })),
+                extraCategories,
+              }),
+            })
+            const data = await res.json()
+            if (!res.ok || data.error) return { error: data.error || `Server returned ${res.status}` }
+            return { results: data.results as Array<{ id: string; category: string; subcategory?: string; confidence: number }> }
+          } catch {
+            return { error: 'Network error' }
+          }
+        })
+      )
+
+      const failed = responses.filter(r => 'error' in r)
+      if (failed.length > 0) {
+        setErrors([{
+          file: 'AI Re-categorize',
+          error: `${failed.length} of ${batches.length} batch${batches.length === 1 ? '' : 'es'} failed: ${(failed[0] as { error: string }).error}`,
+        }])
+        // Still show proposals for the successful batches if any
+        if (failed.length === batches.length) {
+          setRecatOpen(false)
+          return
+        }
       }
 
       const byId = new Map<string, { category: string; subcategory?: string; confidence: number }>()
-      ;(data.results as Array<{ id: string; category: string; subcategory?: string; confidence: number }>).forEach(r => {
-        byId.set(r.id, r)
+      responses.forEach(r => {
+        if ('results' in r && r.results) {
+          r.results.forEach(item => byId.set(item.id, item))
+        }
       })
 
       const proposals: RecategorizeProposal[] = txns.map(t => {
