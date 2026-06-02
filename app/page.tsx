@@ -12,6 +12,8 @@ import {
   FlagTriangleRight,
   X,
   History,
+  Search,
+  Pencil,
 } from 'lucide-react'
 import UploadZone from '@/components/UploadZone'
 import CategoryCard from '@/components/CategoryCard'
@@ -71,6 +73,8 @@ export default function Home() {
   const [errors, setErrors] = useState<{ file: string; error: string }[]>([])
   const [yearFilter, setYearFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeTab, setActiveTab] = useState<'expenses' | 'income'>('expenses')
 
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
@@ -359,9 +363,21 @@ export default function Home() {
       .filter(y => y && y !== 'unkn' && /^\d{4}$/.test(y))
   )].sort().reverse()
 
+  // Stable totals for the tab labels (don't react to search/filter so the
+  // counts in the tab pills stay consistent).
+  const expenseTotalCount = allTransactions.filter(t => t.amount > 0).length
+  const incomeTotalCount = allTransactions.filter(t => t.amount < 0).length
+
+  const searchTerm = searchQuery.trim().toLowerCase()
   const filtered = allTransactions.filter(t => {
+    if (activeTab === 'expenses' && !(t.amount > 0)) return false
+    if (activeTab === 'income' && !(t.amount < 0)) return false
     if (yearFilter !== 'all' && !t.date?.startsWith(yearFilter)) return false
     if (categoryFilter !== 'all' && t.category !== categoryFilter) return false
+    if (searchTerm) {
+      const hay = `${t.description} ${t.subcategory || ''} ${t.category} ${t.source}`.toLowerCase()
+      if (!hay.includes(searchTerm)) return false
+    }
     return true
   })
 
@@ -375,7 +391,9 @@ export default function Home() {
         transactions: [],
       }
     }
-    if (t.amount > 0) acc[t.category].total += t.amount
+    // Sum absolute amount so income totals (negative raw amounts) render
+    // as the positive money received in the category.
+    acc[t.category].total += Math.abs(t.amount)
     acc[t.category].count += 1
     acc[t.category].transactions.push(t)
     return acc
@@ -383,13 +401,22 @@ export default function Home() {
 
   const categories = Object.values(categoryMap).sort((a, b) => b.total - a.total)
 
-  const totalSpent = filtered.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0)
-  const totalIncome = filtered.filter(t => t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0)
+  const tabTotal = filtered.reduce((s, t) => s + Math.abs(t.amount), 0)
   const taxDeductible = categories
     .filter(c => POTENTIALLY_DEDUCTIBLE.includes(c.name))
     .reduce((s, c) => s + c.total, 0)
 
-  const reviewQueue = filtered.filter(t => t.needsReview)
+  // For Income tab: largest source by subcategory (or description) total.
+  const incomeSources = filtered.reduce<Record<string, number>>((acc, t) => {
+    const key = t.subcategory || t.description || 'Unknown'
+    acc[key] = (acc[key] || 0) + Math.abs(t.amount)
+    return acc
+  }, {})
+  const topSource = Object.entries(incomeSources).sort((a, b) => b[1] - a[1])[0]
+
+  // Review queue is global — show all needs-review across both tabs in the
+  // banner since it shouldn't disappear just because user toggled to income.
+  const reviewQueue = allTransactions.filter(t => t.needsReview)
   const totalAggregateFiles =
     activeJobs.reduce((s, j) => s + j.fileNames.length, 0) + processedFiles.length
 
@@ -499,61 +526,135 @@ export default function Home() {
           <>
             <ReviewBanner count={reviewQueue.length} onOpen={() => setReviewOpen(true)} />
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center gap-2 text-red-500 mb-1">
-                  <TrendingDown size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Total Spent</span>
-                </div>
-                <p className="text-2xl font-bold text-gray-900">${totalSpent.toFixed(2)}</p>
-                <p className="text-xs text-gray-400 mt-1">{filtered.filter(t => t.amount > 0).length} transactions</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center gap-2 text-green-500 mb-1">
-                  <TrendingUp size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Total Income</span>
-                </div>
-                <p className="text-2xl font-bold text-gray-900">${totalIncome.toFixed(2)}</p>
-                <p className="text-xs text-gray-400 mt-1">{filtered.filter(t => t.amount < 0).length} credits</p>
-              </div>
-              <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="flex items-center gap-2 text-blue-500 mb-1">
-                  <BarChart3 size={16} />
-                  <span className="text-xs font-medium uppercase tracking-wide">Potentially Deductible</span>
-                </div>
-                <p className="text-2xl font-bold text-gray-900">${taxDeductible.toFixed(2)}</p>
-                <p className="text-xs text-gray-400 mt-1">Gas, Medical, Education, Charity, Business…</p>
-              </div>
+            {/* Expenses vs Income tab toggle */}
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-4 max-w-md">
+              <button
+                onClick={() => setActiveTab('expenses')}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${
+                  activeTab === 'expenses'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <TrendingDown size={14} className={activeTab === 'expenses' ? 'text-red-500' : ''} />
+                Expenses ({expenseTotalCount})
+              </button>
+              <button
+                onClick={() => setActiveTab('income')}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${
+                  activeTab === 'income'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <TrendingUp size={14} className={activeTab === 'income' ? 'text-green-500' : ''} />
+                Money In ({incomeTotalCount})
+              </button>
             </div>
 
-            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-              <div className="flex gap-2 flex-wrap">
-                <select
-                  value={yearFilter}
-                  onChange={e => setYearFilter(e.target.value)}
-                  className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All Years</option>
-                  {years.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
-                <select
-                  value={categoryFilter}
-                  onChange={e => setCategoryFilter(e.target.value)}
-                  className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="all">All Categories</option>
-                  {categories.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
-                </select>
-                {reviewQueue.length > 0 && (
+            {/* Per-tab summary cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className={`flex items-center gap-2 mb-1 ${activeTab === 'expenses' ? 'text-red-500' : 'text-green-500'}`}>
+                  {activeTab === 'expenses' ? <TrendingDown size={16} /> : <TrendingUp size={16} />}
+                  <span className="text-xs font-medium uppercase tracking-wide">
+                    {activeTab === 'expenses' ? 'Total Spent' : 'Total Received'}
+                  </span>
+                </div>
+                <p className="text-2xl font-bold text-gray-900">${tabTotal.toFixed(2)}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {filtered.length} {activeTab === 'expenses' ? 'transaction' : 'payment'}{filtered.length === 1 ? '' : 's'}
+                  {searchTerm && ' matching search'}
+                </p>
+              </div>
+
+              {activeTab === 'expenses' ? (
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-center gap-2 text-blue-500 mb-1">
+                    <BarChart3 size={16} />
+                    <span className="text-xs font-medium uppercase tracking-wide">Potentially Deductible</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">${taxDeductible.toFixed(2)}</p>
+                  <p className="text-xs text-gray-400 mt-1">Gas, Medical, Education, Charity, Business…</p>
+                </div>
+              ) : (
+                <div className="bg-white rounded-xl border border-gray-200 p-4">
+                  <div className="flex items-center gap-2 text-emerald-500 mb-1">
+                    <BarChart3 size={16} />
+                    <span className="text-xs font-medium uppercase tracking-wide">Largest Source</span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {topSource ? `$${topSource[1].toFixed(2)}` : '—'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1 truncate">
+                    {topSource ? topSource[0] : 'No income in this view'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Search + filters */}
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Escape' && setSearchQuery('')}
+                  placeholder={`Search ${activeTab === 'expenses' ? 'expenses' : 'income'} by merchant, category, source…`}
+                  className="w-full pl-9 pr-9 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {searchQuery && (
                   <button
-                    onClick={() => setReviewOpen(true)}
-                    className="flex items-center gap-1 text-sm font-medium text-amber-700 border border-amber-200 bg-amber-50 hover:bg-amber-100 rounded-lg px-3 py-2"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 p-1"
+                    title="Clear search"
                   >
-                    <FlagTriangleRight size={14} />
-                    Review ({reviewQueue.length})
+                    <X size={14} />
                   </button>
                 )}
               </div>
+              <select
+                value={yearFilter}
+                onChange={e => setYearFilter(e.target.value)}
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Years</option>
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <select
+                value={categoryFilter}
+                onChange={e => setCategoryFilter(e.target.value)}
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All Categories</option>
+                {categories.map(c => <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>)}
+              </select>
+              {reviewQueue.length > 0 && (
+                <button
+                  onClick={() => setReviewOpen(true)}
+                  className="flex items-center gap-1 text-sm font-medium text-amber-700 border border-amber-200 bg-amber-50 hover:bg-amber-100 rounded-lg px-3 py-2"
+                >
+                  <FlagTriangleRight size={14} />
+                  Review ({reviewQueue.length})
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <p className="text-xs text-gray-400">
+                {searchTerm ? (
+                  <>
+                    <span className="font-medium text-gray-600">{filtered.length}</span> match{filtered.length === 1 ? '' : 'es'} for &ldquo;{searchQuery}&rdquo;
+                  </>
+                ) : (
+                  <>
+                    Showing {totalAggregateFiles} file{totalAggregateFiles === 1 ? '' : 's'} from {completedJobs.length} analys{completedJobs.length === 1 ? 'is' : 'es'}.{' '}
+                    <Link href="/history" className="underline hover:text-gray-600">Manage in History →</Link>
+                  </>
+                )}
+              </p>
               <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={exportForTax}
@@ -580,27 +681,73 @@ export default function Home() {
               </div>
             </div>
 
-            {processedFiles.length > 0 && (
-              <p className="text-xs text-gray-400 mb-4">
-                Showing {totalAggregateFiles} file{totalAggregateFiles === 1 ? '' : 's'} from {completedJobs.length} analys{completedJobs.length === 1 ? 'is' : 'es'}.{' '}
-                <Link href="/history" className="underline hover:text-gray-600">Manage in History →</Link>
-              </p>
-            )}
-
-            <div className="space-y-3">
-              {categories.map(cat => (
-                <CategoryCard
-                  key={cat.name}
-                  category={cat}
-                  onEditTransaction={setEditingTxn}
-                />
-              ))}
-            </div>
-
-            {categories.length === 0 && (
-              <div className="text-center py-12 text-gray-400">
-                <p>No transactions match the current filters</p>
-              </div>
+            {/* Search mode: flat results. Otherwise: category cards. */}
+            {searchTerm ? (
+              filtered.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <p>No matches for &ldquo;{searchQuery}&rdquo;</p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {[...filtered]
+                    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+                    .map(t => (
+                      <div
+                        key={t.id}
+                        className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3 hover:border-blue-300 transition-colors"
+                      >
+                        <span className="text-2xl shrink-0" title={t.category}>{emojiFor(t.category)}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
+                          <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                            <span>{t.date}</span>
+                            <span className="text-gray-300">·</span>
+                            <span className="text-gray-600">{t.category}</span>
+                            {t.subcategory && t.subcategory !== t.description && (
+                              <>
+                                <span className="text-gray-300">·</span>
+                                <span className="text-blue-500">{t.subcategory}</span>
+                              </>
+                            )}
+                            <span className="text-gray-300">·</span>
+                            <span className="truncate">{t.source}</span>
+                          </div>
+                        </div>
+                        <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                          {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
+                        </span>
+                        <button
+                          onClick={() => setEditingTxn(t)}
+                          className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
+                          title="Move to a different category"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )
+            ) : (
+              <>
+                <div className="space-y-3">
+                  {categories.map(cat => (
+                    <CategoryCard
+                      key={cat.name}
+                      category={cat}
+                      onEditTransaction={setEditingTxn}
+                    />
+                  ))}
+                </div>
+                {categories.length === 0 && (
+                  <div className="text-center py-12 text-gray-400">
+                    <p>
+                      {activeTab === 'income'
+                        ? 'No income transactions in this view yet'
+                        : 'No transactions match the current filters'}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}

@@ -1,6 +1,6 @@
-// Bumped from v1 -> v2 to evict stale client bundles that pre-date the
-// per-file upload split. Increment again on any breaking client change.
-const CACHE_NAME = 'statement-analyzer-v2'
+// v3 — added search bar + Expenses/Income tab toggle. Increment again on
+// any breaking client change to force the PWA to evict stale bundles.
+const CACHE_NAME = 'statement-analyzer-v3'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
