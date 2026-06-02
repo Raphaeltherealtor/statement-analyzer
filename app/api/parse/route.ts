@@ -89,16 +89,39 @@ Category rules:
 - IRS, state tax payments, DMV, passport, government fees → "Taxes & Government"
 
 Real-estate / professional-services specific rules (prefer these over the generic Office/SaaS buckets when they fit):
-- Postcard mailers (THANKS.IO, Click2Mail), business cards (VistaPrint, MOO), Zillow/Realtor.com/Trulia/Homes.com lead ads, social ads (Meta, TikTok, Google Ads), email marketing (Mailchimp, ActiveCampaign, ConvertKit), video marketing tools (Pictory, Veed, Descript), Canva → "Marketing & Advertising"
+
+Marketing / lead gen / brand stack:
+- Postcard mailers (THANKS.IO, Click2Mail, Wise Pelican), business cards (VistaPrint, MOO, Moo.com), flyers/brochure printing, social ads (Meta / Facebook / Instagram / TikTok / LinkedIn / Google Ads / YouTube Ads), email marketing (Mailchimp, ActiveCampaign, ConvertKit, Constant Contact), video marketing tools (Pictory, Veed, Descript, InVideo), Canva, sponsored local events → "Marketing & Advertising"
+- CRM & lead-gen subscriptions: Follow Up Boss, kvCORE, BoldLeads, Zillow Premier Agent, Realtor.com Connections, BoomTown, LionDesk, Ylopo, Curaytor, Top Producer, REDX, Vulcan7, Espresso Agent, Wise Agent, Sierra Interactive, Real Geeks → "CRM & Lead Generation"
+- Property staging companies, furniture rental for staging (BoxBrownie virtual staging, Vesta Home, Meridith Baer), yard/open-house signs and riders, banner printing, sign installers → "Staging & Signage"
+- Professional photo shoots, drone services (DroneBase, BoxBrownie), virtual tour services (Matterport, iGuide, Asteroom), photo editing subs (Lightroom, Capture One), property videography → "Photography & Video"
+- Squarespace (SQSP), WordPress, Wix, GoDaddy, Google Domains (g.co/helppay#), Bluehost, Cloudflare, Webflow, Showcase IDX, IDX Broker → "Website & Hosting"
+
+Professional dues / education / events:
 - REALTOR ASSOCIATION, MLS subscriptions, CRMLS, NAR/CAR/NWMLS/state real estate board dues → "MLS & Association Dues"
+- State CE / license renewal for an active profession (real estate, mortgage, insurance CE), additional certifications/designations (CRS, GRI, ABR, SRES) → "Continuing Education"
+- Conference fees (Inman Connect, NAR conference, ICNY, eXpCON, KW Family Reunion), conference travel airfare/lodging when clearly business, mastermind events, broker summit fees → "Conferences & Events"
+
+Brokerage / lockbox / transaction operations:
 - eXp Realty fees (PLD, eXp World, eXpand Mentor), Compass / Keller Williams / Coldwell transaction fees, E&O insurance billed by brokerage, broker desk fees → "Brokerage Fees"
 - Supra Real Estate (SUPRA RE), lockbox keys, eKey services, showing services (ShowingTime, Aligned Showings), PacificCoast Agent → "Lockboxes & Showings"
-- Client closing gifts, client appreciation, thank-you cards, gift baskets when clearly tied to clients → "Client Gifts & Closing"
-- Squarespace (SQSP), WordPress, Wix, GoDaddy, Google Domains (g.co/helppay#), Bluehost, Cloudflare → "Website & Hosting"
-- Professional photo shoots, drone services, virtual tour services (Matterport, iGuide, Asteroom), photo editing subs (Lightroom, BoxBrownie) → "Photography & Video"
-- State CE / license renewal for an active profession (real estate, mortgage, insurance CE) → "Continuing Education"
 
-Generic productivity tools that AREN'T marketing or website-specific (Microsoft 365, Google Workspace, GitHub, OpenAI/ChatGPT, Adobe (non-Lightroom), Everlance, Notion, password managers) → "Software & SaaS"
+Client appreciation & professional services:
+- Client closing gifts, client appreciation, thank-you cards, gift baskets when clearly tied to clients, open-house refreshments → "Client Gifts & Closing"
+- Attorneys, paralegals, CPAs, tax preparers, bookkeepers (QuickBooks Online subscriptions), financial advisors, fractional-CFO services, referral fees paid to other agents → "Legal & Professional Services"
+
+Office / equipment / supplies:
+- Larger tech purchases (computers, laptops, monitors, printers, hard drives, iPads/tablets, cameras over ~$200), B&H Photo, Apple Store, Best Buy hardware, Dell/Lenovo direct → "Office Equipment & Tech"
+- Postage (USPS PO, Stamps.com), shipping (UPS, FedEx, DHL), courier services, shipping supplies (Uline) → "Postage & Shipping"
+- Tolls (SunPass, EZ Pass, FasTrak, TollTag), parking meters, parking garages, valet, ParkMobile, SpotHero → "Tolls & Parking"
+- Home-office-only spend: cleaning services for the home office space, pest control for the home, plant rentals for an office, office furniture (Wayfair, IKEA when clearly for home office), home office decor → "Home Office"
+
+Self-employed adjustments (NOT Schedule C, but separately reportable):
+- Self-paid health insurance premiums (Blue Shield, Anthem, Kaiser, Aetna, healthcare.gov, Cigna) → "Health Insurance"
+- SEP-IRA / Solo 401k / IRA contributions paid directly to Fidelity, Vanguard, Schwab, E*Trade, Robinhood Retirement (only when clearly retirement contributions, not regular brokerage deposits) → "Retirement Contributions"
+- Virtual assistant fees, freelance contractor services billed via Upwork/Fiverr, 1099 transaction coordinators, paid showing assistants → "Contract Labor"
+
+Generic productivity tools that AREN'T marketing, CRM, or website-specific (Microsoft 365, Google Workspace, GitHub, OpenAI/ChatGPT, Anthropic, Adobe (non-Lightroom), Everlance, Notion, Slack, Zoom, password managers, cloud storage like Dropbox/iCloud/Backblaze) → "Software & SaaS"
 
 - Truly unrecognizable merchants or ambiguous descriptors → "Uncategorized"
 - Recognizable but doesn't fit any bucket above → "Other"

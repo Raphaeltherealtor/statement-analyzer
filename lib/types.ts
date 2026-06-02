@@ -72,13 +72,24 @@ export const DEFAULT_CATEGORY_EMOJIS: Record<string, string> = {
   // Real-estate / professional-services-specific buckets. Detailed enough
   // that a tax preparer can map each one to a clean Schedule C line.
   'Marketing & Advertising': '📣',
+  'CRM & Lead Generation': '🎯',
+  'Staging & Signage': '🪧',
+  'Photography & Video': '📸',
+  'Website & Hosting': '🌐',
   'MLS & Association Dues': '🏘️',
   'Brokerage Fees': '🏢',
   'Lockboxes & Showings': '🔐',
   'Client Gifts & Closing': '🎁',
-  'Website & Hosting': '🌐',
-  'Photography & Video': '📸',
   'Continuing Education': '🎓',
+  'Conferences & Events': '🎤',
+  'Legal & Professional Services': '⚖️',
+  'Office Equipment & Tech': '🖥️',
+  'Postage & Shipping': '📮',
+  'Tolls & Parking': '🅿️',
+  'Home Office': '🏡',
+  'Health Insurance': '🩺',
+  'Retirement Contributions': '🏦',
+  'Contract Labor': '👥',
   'Other': '📌',
   'Uncategorized': '❓',
 }
@@ -100,12 +111,23 @@ export const POTENTIALLY_DEDUCTIBLE = [
   'Phone & Internet',
   'Automotive',
   'Marketing & Advertising',
+  'CRM & Lead Generation',
+  'Staging & Signage',
   'MLS & Association Dues',
   'Brokerage Fees',
   'Lockboxes & Showings',
   'Client Gifts & Closing',
   'Website & Hosting',
   'Photography & Video',
+  'Conferences & Events',
+  'Legal & Professional Services',
+  'Office Equipment & Tech',
+  'Postage & Shipping',
+  'Tolls & Parking',
+  'Home Office',
+  'Health Insurance',
+  'Retirement Contributions',
+  'Contract Labor',
   'Insurance',
 ]
 
@@ -133,6 +155,8 @@ export const TAX_LINE: Record<string, string> = {
 
   // Schedule C — real estate / professional-services-specific
   'Marketing & Advertising': 'Advertising (line 8)',
+  'CRM & Lead Generation': 'Advertising (line 8) — lead gen',
+  'Staging & Signage': 'Advertising (line 8) — staging/signage',
   'Website & Hosting': 'Advertising (line 8)',
   'Photography & Video': 'Advertising (line 8)',
   'Client Gifts & Closing': 'Other — Client Gifts ($25/person cap)',
@@ -140,6 +164,17 @@ export const TAX_LINE: Record<string, string> = {
   'Brokerage Fees': 'Commissions & Fees (line 10)',
   'Lockboxes & Showings': 'Other — Real Estate Operations',
   'Continuing Education': 'Other — Continuing Education',
+  'Conferences & Events': 'Travel (line 24a) — conferences',
+  'Legal & Professional Services': 'Legal & Professional (line 17)',
+  'Office Equipment & Tech': 'Supplies/Depreciation (line 22 / Form 4562)',
+  'Postage & Shipping': 'Office Expense (line 18) — postage',
+  'Tolls & Parking': 'Car and Truck Expenses (line 9)',
+  'Home Office': 'Home Office (Form 8829)',
+  'Contract Labor': 'Contract Labor (line 11)',
+
+  // Adjustments to income (above-the-line, NOT Schedule C)
+  'Health Insurance': 'Schedule 1 — Self-employed Health Ins',
+  'Retirement Contributions': 'Schedule 1 — SEP/Solo 401k',
 
   // Schedule C — office / overhead
   'Office & Business': 'Office Expense (line 18)',
