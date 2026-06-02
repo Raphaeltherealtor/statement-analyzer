@@ -25,6 +25,7 @@ import CategoryCard from '@/components/CategoryCard'
 import ReviewPanel from '@/components/ReviewPanel'
 import ReviewBanner from '@/components/ReviewBanner'
 import RecategorizePreview, { RecategorizeProposal } from '@/components/RecategorizePreview'
+import ManageCategoriesModal from '@/components/ManageCategoriesModal'
 import {
   Transaction,
   Category,
@@ -93,6 +94,8 @@ export default function Home() {
   const [recatLoading, setRecatLoading] = useState(false)
   const [recatProposals, setRecatProposals] = useState<RecategorizeProposal[] | null>(null)
   const [recatProgress, setRecatProgress] = useState<{ done: number; total: number } | null>(null)
+
+  const [manageCategoriesOpen, setManageCategoriesOpen] = useState(false)
 
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
@@ -371,6 +374,68 @@ export default function Home() {
     })
   }
 
+  // Move every transaction in `source` category into `target`, then drop the
+  // source from custom-categories + repoint any merchant rules. Used by the
+  // Manage Categories modal to clean up duplicate buckets like "Marketing"
+  // overlapping with "Marketing & Advertising".
+  const mergeCategory = async (source: string, target: string) => {
+    if (source === target) return
+
+    const changedJobIds = new Set<string>()
+    const updatedJobs = completedJobs.map(job => {
+      let touched = false
+      const newTxns = job.transactions.map(t => {
+        if (t.category === source) {
+          touched = true
+          return { ...t, category: target, needsReview: false }
+        }
+        return t
+      })
+      if (touched) changedJobIds.add(job.id)
+      return touched ? { ...job, transactions: newTxns } : job
+    })
+
+    setCompletedJobs(updatedJobs)
+
+    // Persist each affected job
+    await Promise.all(
+      updatedJobs
+        .filter(j => changedJobIds.has(j.id))
+        .map(j =>
+          fetch(`/api/parse/jobs?jobId=${encodeURIComponent(j.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transactions: j.transactions }),
+          }).catch(() => {})
+        )
+    )
+
+    // Repoint merchant rules that pointed at the merged-away category
+    setMerchantRules(prev => {
+      const next = prev.map(r => (r.category === source ? { ...r, category: target } : r))
+      saveMerchantRules(next)
+      return next
+    })
+
+    // If the source was a custom category, drop it from the picker list now
+    // that it has no purpose.
+    setCustomCategories(prev => {
+      if (!prev.some(c => c.name === source)) return prev
+      const next = prev.filter(c => c.name !== source)
+      saveCustomCategories(next)
+      return next
+    })
+  }
+
+  const deleteCustomCategory = (name: string) => {
+    setCustomCategories(prev => {
+      if (!prev.some(c => c.name === name)) return prev
+      const next = prev.filter(c => c.name !== name)
+      saveCustomCategories(next)
+      return next
+    })
+  }
+
   const startRecategorize = async () => {
     // Snapshot transactions at click time so the proposals match what the
     // user saw when they triggered it.
@@ -395,7 +460,12 @@ export default function Home() {
 
     const extraCategories = customCategories.map(c => c.name)
 
-    const runBatch = async (batch: Transaction[]) => {
+    type BatchResult = {
+      results?: Array<{ id: string; category: string; subcategory?: string; confidence: number }>
+      error?: string
+    }
+
+    const runBatch = async (batch: Transaction[]): Promise<BatchResult> => {
       try {
         const res = await fetch('/api/parse/recategorize', {
           method: 'POST',
@@ -423,13 +493,29 @@ export default function Home() {
       }
     }
 
+    // Up to 3 attempts per batch with 2s -> 8s backoff. Most "failures" we
+    // saw turned out to be flaky network or rate-limit blips that succeed on
+    // the very next try, so this dramatically improves end-to-end success
+    // without adding meaningful wall time when batches succeed first try.
+    const runBatchWithRetry = async (batch: Transaction[]): Promise<BatchResult> => {
+      let last: BatchResult = { error: 'never ran' }
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        last = await runBatch(batch)
+        if (!last.error) return last
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, 2000 * Math.pow(4, attempt - 1)))
+        }
+      }
+      return last
+    }
+
     try {
       // Run in waves of PARALLEL_LIMIT so we get parallelism without exceeding
       // rate limits or flooding the function pool. Each wave updates progress.
-      const responses: Array<{ results?: Array<{ id: string; category: string; subcategory?: string; confidence: number }>; error?: string }> = []
+      const responses: BatchResult[] = []
       for (let i = 0; i < batches.length; i += PARALLEL_LIMIT) {
         const wave = batches.slice(i, i + PARALLEL_LIMIT)
-        const waveResults = await Promise.all(wave.map(runBatch))
+        const waveResults = await Promise.all(wave.map(runBatchWithRetry))
         responses.push(...waveResults)
         setRecatProgress({ done: Math.min(i + PARALLEL_LIMIT, batches.length), total: batches.length })
       }
@@ -686,7 +772,17 @@ export default function Home() {
             {(merchantRules.length > 0 || customCategories.length > 0) && (
               <div className="text-xs text-gray-400 text-right">
                 <p>{merchantRules.length} merchant rule{merchantRules.length === 1 ? '' : 's'}</p>
-                <p>{customCategories.length} custom categor{customCategories.length === 1 ? 'y' : 'ies'}</p>
+                {customCategories.length > 0 ? (
+                  <button
+                    onClick={() => setManageCategoriesOpen(true)}
+                    className="text-amber-600 hover:text-amber-800 underline-offset-2 hover:underline"
+                    title="Merge custom categories into existing ones (e.g. 'Marketing' → 'Marketing & Advertising')"
+                  >
+                    {customCategories.length} custom categor{customCategories.length === 1 ? 'y' : 'ies'} · manage
+                  </button>
+                ) : (
+                  <p>0 custom categories</p>
+                )}
               </div>
             )}
           </div>
@@ -1069,6 +1165,23 @@ export default function Home() {
             setRecatProgress(null)
           }}
           onApply={applyRecategorizeProposals}
+        />
+      )}
+
+      {manageCategoriesOpen && (
+        <ManageCategoriesModal
+          onClose={() => setManageCategoriesOpen(false)}
+          customCategories={customCategories}
+          transactionCounts={
+            // Build live count per category from all loaded transactions
+            allTransactions.reduce<Map<string, number>>((acc, t) => {
+              acc.set(t.category, (acc.get(t.category) || 0) + 1)
+              return acc
+            }, new Map())
+          }
+          allCategories={pickerCategories}
+          onMerge={mergeCategory}
+          onDelete={deleteCustomCategory}
         />
       )}
     </div>

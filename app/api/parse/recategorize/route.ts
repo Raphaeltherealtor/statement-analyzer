@@ -88,6 +88,16 @@ Generic productivity NOT in any specific bucket (Microsoft 365, Google Workspace
 - Truly unrecognizable → "Uncategorized"
 - Recognizable but doesn't fit anything above → "Other"
 
+CANONICAL CATEGORIES — when there's overlap, always pick the built-in:
+The default categories above are the canonical ones. If the user has defined
+custom categories that overlap in meaning with a default (e.g. a custom
+"Marketing" duplicates the built-in "Marketing & Advertising"; a custom
+"CRM" duplicates "CRM & Lead Generation"; a custom "Showings" duplicates
+"Lockboxes & Showings"), pick the BUILT-IN. Built-ins have standardized
+wording that maps cleanly to Schedule C lines. Only use a custom category
+when it represents something genuinely distinct that none of the defaults
+cover (e.g. a custom "Side Hustle Income" or "Spouse W-2").
+
 Input format: one line per transaction, "ID :: DESCRIPTION :: $AMOUNT :: DATE"
 Output: a JSON array, one entry per input, in the same order:
 [{ "id": "...", "category": "...", "subcategory": "...", "confidence": 0.95 }, ...]

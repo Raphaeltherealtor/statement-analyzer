@@ -1,7 +1,6 @@
-// v11 — AI Re-categorize: group proposals by normalized merchant so 47
-// Amazon rows collapse into one expandable row with group-level accept,
-// override, and per-row cherry-picking.
-const CACHE_NAME = 'statement-analyzer-v11'
+// v12 — AI Re-categorize: per-batch retry with backoff. Manage Categories
+// modal for merging duplicate custom buckets into canonical defaults.
+const CACHE_NAME = 'statement-analyzer-v12'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
