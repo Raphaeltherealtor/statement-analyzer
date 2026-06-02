@@ -17,11 +17,13 @@ import {
   CheckSquare,
   Square,
   ListChecks,
+  Sparkles,
 } from 'lucide-react'
 import UploadZone from '@/components/UploadZone'
 import CategoryCard from '@/components/CategoryCard'
 import ReviewPanel from '@/components/ReviewPanel'
 import ReviewBanner from '@/components/ReviewBanner'
+import RecategorizePreview, { RecategorizeProposal } from '@/components/RecategorizePreview'
 import {
   Transaction,
   Category,
@@ -83,6 +85,12 @@ export default function Home() {
   // transactions go into the tax CSV. Defaults to all selected on entry.
   const [taxExportMode, setTaxExportMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  // AI re-categorize flow: open modal, kick off Claude call, preview diff,
+  // user accepts/rejects per change, apply to local + Supabase.
+  const [recatOpen, setRecatOpen] = useState(false)
+  const [recatLoading, setRecatLoading] = useState(false)
+  const [recatProposals, setRecatProposals] = useState<RecategorizeProposal[] | null>(null)
 
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [merchantRules, setMerchantRules] = useState<MerchantRule[]>([])
@@ -359,6 +367,109 @@ export default function Home() {
       saveCustomCategories(next)
       return next
     })
+  }
+
+  const startRecategorize = async () => {
+    // Snapshot transactions at click time so the proposals match what the
+    // user saw when they triggered it.
+    const txns = completedJobs.flatMap(j => j.transactions)
+    if (txns.length === 0) return
+
+    setRecatOpen(true)
+    setRecatProposals(null)
+    setRecatLoading(true)
+
+    try {
+      const res = await fetch('/api/parse/recategorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactions: txns.map(t => ({
+            id: t.id,
+            description: t.description,
+            amount: t.amount,
+            date: t.date,
+            currentCategory: t.category,
+          })),
+          extraCategories: customCategories.map(c => c.name),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) {
+        setErrors([{ file: 'AI Re-categorize', error: data.error || `Server returned ${res.status}` }])
+        setRecatOpen(false)
+        return
+      }
+
+      const byId = new Map<string, { category: string; subcategory?: string; confidence: number }>()
+      ;(data.results as Array<{ id: string; category: string; subcategory?: string; confidence: number }>).forEach(r => {
+        byId.set(r.id, r)
+      })
+
+      const proposals: RecategorizeProposal[] = txns.map(t => {
+        const r = byId.get(t.id)
+        return {
+          transaction: t,
+          newCategory: r?.category || t.category,
+          newSubcategory: r?.subcategory,
+          confidence: r?.confidence ?? 1,
+        }
+      })
+      setRecatProposals(proposals)
+    } catch {
+      setErrors([{ file: 'AI Re-categorize', error: 'Failed to reach server' }])
+      setRecatOpen(false)
+    } finally {
+      setRecatLoading(false)
+    }
+  }
+
+  const applyRecategorizeProposals = async (accepted: RecategorizeProposal[]) => {
+    if (accepted.length === 0) {
+      setRecatOpen(false)
+      setRecatProposals(null)
+      return
+    }
+
+    const proposalById = new Map(accepted.map(p => [p.transaction.id, p]))
+    const changedJobIds = new Set<string>()
+
+    const updatedJobs = completedJobs.map(job => {
+      let touched = false
+      const newTxns = job.transactions.map(t => {
+        const p = proposalById.get(t.id)
+        if (p && p.newCategory !== t.category) {
+          touched = true
+          return {
+            ...t,
+            category: p.newCategory,
+            subcategory: p.newSubcategory || t.subcategory,
+            confidence: p.confidence,
+            needsReview: false,
+          }
+        }
+        return t
+      })
+      if (touched) changedJobIds.add(job.id)
+      return touched ? { ...job, transactions: newTxns } : job
+    })
+
+    setCompletedJobs(updatedJobs)
+
+    await Promise.all(
+      updatedJobs
+        .filter(j => changedJobIds.has(j.id))
+        .map(j =>
+          fetch(`/api/parse/jobs?jobId=${encodeURIComponent(j.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transactions: j.transactions }),
+          }).catch(() => {})
+        )
+    )
+
+    setRecatOpen(false)
+    setRecatProposals(null)
   }
 
   // Derived state
@@ -745,14 +856,24 @@ export default function Home() {
               </p>
               <div className="flex gap-2 flex-wrap">
                 {!taxExportMode && (
-                  <button
-                    onClick={enterTaxExportMode}
-                    className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-4 py-2 transition-colors"
-                    title="Pick which transactions to include in the tax export"
-                  >
-                    <ListChecks size={14} />
-                    Tax Export…
-                  </button>
+                  <>
+                    <button
+                      onClick={startRecategorize}
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg px-4 py-2 transition-colors"
+                      title="Have AI re-classify all transactions using the latest real-estate-aware rules"
+                    >
+                      <Sparkles size={14} />
+                      AI Re-categorize
+                    </button>
+                    <button
+                      onClick={enterTaxExportMode}
+                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-4 py-2 transition-colors"
+                      title="Pick which transactions to include in the tax export"
+                    >
+                      <ListChecks size={14} />
+                      Tax Export…
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={exportAll}
@@ -877,6 +998,19 @@ export default function Home() {
         onCreateCategory={handleCreateCategory}
         singleMode={editingTxn !== null}
       />
+
+      {recatOpen && (
+        <RecategorizePreview
+          loading={recatLoading}
+          proposals={recatProposals}
+          emojiFor={emojiFor}
+          onClose={() => {
+            setRecatOpen(false)
+            setRecatProposals(null)
+          }}
+          onApply={applyRecategorizeProposals}
+        />
+      )}
     </div>
   )
 }

@@ -1,8 +1,5 @@
-// v5 — expanded real-estate categories (CRM & Lead Gen, Staging & Signage,
-// Conferences & Events, Legal & Professional Services, Office Equipment &
-// Tech, Postage & Shipping, Tolls & Parking, Home Office, Health Insurance,
-// Retirement Contributions, Contract Labor).
-const CACHE_NAME = 'statement-analyzer-v5'
+// v6 — added AI Re-categorize button + preview modal.
+const CACHE_NAME = 'statement-analyzer-v6'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
