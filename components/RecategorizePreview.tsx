@@ -1,8 +1,20 @@
 'use client'
 
-import { useState } from 'react'
-import { X, ArrowRight, RefreshCw, Sparkles, CheckSquare, Square, RotateCcw } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  X,
+  ArrowRight,
+  RefreshCw,
+  Sparkles,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  ChevronDown,
+  ChevronRight,
+  RotateCcw,
+} from 'lucide-react'
 import { Transaction } from '@/lib/types'
+import { normalizeMerchant } from '@/lib/normalize'
 
 export interface RecategorizeProposal {
   transaction: Transaction
@@ -21,8 +33,18 @@ interface RecategorizePreviewProps {
   onApply: (accepted: RecategorizeProposal[]) => void | Promise<void>
 }
 
-// Parent mounts this only while open, so component state resets naturally
-// between runs — no useEffect-driven reset needed.
+interface ProposalGroup {
+  key: string
+  merchantLabel: string
+  proposals: RecategorizeProposal[]
+  dominantAi: string
+  hasMixedAi: boolean
+  hasMixedCurrent: boolean
+  uniformCurrent: string | null
+  totalAbsAmount: number
+  avgConfidence: number
+}
+
 export default function RecategorizePreview({
   onClose,
   loading,
@@ -32,72 +54,154 @@ export default function RecategorizePreview({
   emojiFor,
   onApply,
 }: RecategorizePreviewProps) {
-  // Rejected IDs are what the user explicitly UNchecked. Override map is
-  // for per-row category changes — when the AI suggests something the user
-  // disagrees with, they pick the correct destination from the dropdown
-  // and that wins over the AI's pick.
   const [rejected, setRejected] = useState<Set<string>>(new Set())
-  const [overrides, setOverrides] = useState<Map<string, string>>(new Map())
+  const [groupOverrides, setGroupOverrides] = useState<Map<string, string>>(new Map())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [applying, setApplying] = useState(false)
   const [filter, setFilter] = useState<'changes' | 'all'>('changes')
 
-  const all = proposals || []
+  // Group by normalized merchant — so 47 Amazon rows collapse into one row
+  // the user can accept, override, or cherry-pick inside.
+  const groups = useMemo<ProposalGroup[]>(() => {
+    const input = proposals || []
+    const map = new Map<string, RecategorizeProposal[]>()
+    for (const p of input) {
+      const key = normalizeMerchant(p.transaction.description) || `unk:${p.transaction.id}`
+      const list = map.get(key) || []
+      list.push(p)
+      map.set(key, list)
+    }
 
-  // The user's manual choice always wins. If no override, fall back to AI.
-  const effectiveCategory = (p: RecategorizeProposal): string =>
-    overrides.get(p.transaction.id) ?? p.newCategory
+    return Array.from(map.entries())
+      .map(([key, list]) => {
+        const aiCounts = new Map<string, number>()
+        const currentSet = new Set<string>()
+        list.forEach(p => {
+          aiCounts.set(p.newCategory, (aiCounts.get(p.newCategory) || 0) + 1)
+          currentSet.add(p.transaction.category)
+        })
+        const sortedAi = Array.from(aiCounts.entries()).sort((a, b) => b[1] - a[1])
+        const merchantLabel = list[0].transaction.subcategory || list[0].transaction.description
+        return {
+          key,
+          merchantLabel,
+          proposals: list.sort((a, b) => (b.transaction.date || '').localeCompare(a.transaction.date || '')),
+          dominantAi: sortedAi[0][0],
+          hasMixedAi: sortedAi.length > 1,
+          hasMixedCurrent: currentSet.size > 1,
+          uniformCurrent: currentSet.size === 1 ? Array.from(currentSet)[0] : null,
+          totalAbsAmount: list.reduce((s, p) => s + Math.abs(p.transaction.amount), 0),
+          avgConfidence: list.reduce((s, p) => s + p.confidence, 0) / list.length,
+        }
+      })
+      .sort((a, b) => b.totalAbsAmount - a.totalAbsAmount)
+  }, [proposals])
 
-  // A "change" is any row where the effective destination differs from the
-  // current category. Includes both AI-suggested changes and user overrides
-  // that touch otherwise-unchanged rows.
-  const changes = all.filter(p => effectiveCategory(p) !== p.transaction.category)
-  const visible = filter === 'changes' ? changes : all
-  const accepted = changes.filter(p => !rejected.has(p.transaction.id))
+  // Effective destination for a single proposal given the group's override
+  // (group override beats AI; if no override, fall back to per-row AI pick).
+  const effectiveCategory = (g: ProposalGroup, p: RecategorizeProposal): string => {
+    return groupOverrides.get(g.key) ?? p.newCategory
+  }
 
-  const toggle = (id: string) => {
+  // Does this row actually represent a category change (after overrides)?
+  const rowIsChange = (g: ProposalGroup, p: RecategorizeProposal): boolean =>
+    effectiveCategory(g, p) !== p.transaction.category
+
+  const groupHasAnyChange = (g: ProposalGroup): boolean =>
+    g.proposals.some(p => rowIsChange(g, p))
+
+  // ── Bulk helpers ──────────────────────────────────────────────────────
+  const setRowRejected = (id: string, reject: boolean) => {
     setRejected(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (reject) next.add(id)
+      else next.delete(id)
       return next
     })
   }
 
-  const setOverride = (id: string, category: string) => {
-    setOverrides(prev => {
-      const next = new Map(prev)
-      next.set(id, category)
-      return next
-    })
-    // If the user is actively setting a destination, they're implicitly
-    // accepting the row — undo any previous rejection.
+  const toggleRow = (id: string) => setRowRejected(id, !rejected.has(id))
+
+  const toggleGroup = (g: ProposalGroup) => {
+    // Indeterminate or all-included → reject all; all-rejected → re-include all
+    const acceptedCount = g.proposals.filter(p => !rejected.has(p.transaction.id)).length
     setRejected(prev => {
-      if (!prev.has(id)) return prev
       const next = new Set(prev)
-      next.delete(id)
+      if (acceptedCount > 0) {
+        // Reject every member
+        g.proposals.forEach(p => next.add(p.transaction.id))
+      } else {
+        // Accept every member
+        g.proposals.forEach(p => next.delete(p.transaction.id))
+      }
       return next
     })
   }
 
-  const clearOverride = (id: string) => {
-    setOverrides(prev => {
-      if (!prev.has(id)) return prev
+  const setGroupOverride = (g: ProposalGroup, category: string) => {
+    setGroupOverrides(prev => {
       const next = new Map(prev)
-      next.delete(id)
+      next.set(g.key, category)
+      return next
+    })
+    // Picking a destination implicitly re-includes any rejected rows in the
+    // group — the act of selecting IS the intent to apply.
+    setRejected(prev => {
+      let mutated = false
+      const next = new Set(prev)
+      for (const p of g.proposals) {
+        if (next.delete(p.transaction.id)) mutated = true
+      }
+      return mutated ? next : prev
+    })
+  }
+
+  const clearGroupOverride = (g: ProposalGroup) => {
+    setGroupOverrides(prev => {
+      if (!prev.has(g.key)) return prev
+      const next = new Map(prev)
+      next.delete(g.key)
+      return next
+    })
+  }
+
+  const toggleExpanded = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       return next
     })
   }
 
   const acceptAll = () => setRejected(new Set())
-  const rejectAll = () => setRejected(new Set(changes.map(p => p.transaction.id)))
+  const rejectAll = () => {
+    const ids = new Set<string>()
+    groups.forEach(g => g.proposals.forEach(p => {
+      if (rowIsChange(g, p)) ids.add(p.transaction.id)
+    }))
+    setRejected(ids)
+  }
+
+  // ── Counts ────────────────────────────────────────────────────────────
+  const changeGroups = groups.filter(groupHasAnyChange)
+  const visibleGroups = filter === 'changes' ? changeGroups : groups
+  const acceptedRowCount = groups.reduce((sum, g) => {
+    return sum + g.proposals.filter(p => rowIsChange(g, p) && !rejected.has(p.transaction.id)).length
+  }, 0)
+  const overrideCount = groupOverrides.size
 
   const handleApply = async () => {
     setApplying(true)
     try {
-      const finalAccepted = accepted.map(p => ({
-        ...p,
-        newCategory: effectiveCategory(p),
-      }))
+      const finalAccepted: RecategorizeProposal[] = []
+      for (const g of groups) {
+        for (const p of g.proposals) {
+          if (!rowIsChange(g, p)) continue
+          if (rejected.has(p.transaction.id)) continue
+          finalAccepted.push({ ...p, newCategory: effectiveCategory(g, p) })
+        }
+      }
       await onApply(finalAccepted)
     } finally {
       setApplying(false)
@@ -116,7 +220,8 @@ export default function RecategorizePreview({
               {!loading && proposals && (
                 <p className="text-xs text-gray-500 mt-0.5">
                   Reviewed {proposals.length} transaction{proposals.length === 1 ? '' : 's'} ·{' '}
-                  <span className="font-medium text-purple-700">{changes.length}</span> change{changes.length === 1 ? '' : 's'} pending
+                  <span className="font-medium text-purple-700">{groups.length}</span> merchant{groups.length === 1 ? '' : 's'} ·{' '}
+                  <span className="font-medium text-purple-700">{changeGroups.length}</span> with changes
                 </p>
               )}
             </div>
@@ -156,8 +261,8 @@ export default function RecategorizePreview({
           <div className="flex-1 flex items-center justify-center p-10 text-gray-400 text-sm">
             No proposals to show.
           </div>
-        ) : all.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-10 text-gray-400 text-sm">
+        ) : groups.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center p-10 text-gray-400 text-sm">
             No transactions to review.
           </div>
         ) : (
@@ -169,13 +274,13 @@ export default function RecategorizePreview({
                   onClick={() => setFilter('changes')}
                   className={`px-2.5 py-1 rounded-md font-medium ${filter === 'changes' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
                 >
-                  Changes ({changes.length})
+                  Changes ({changeGroups.length})
                 </button>
                 <button
                   onClick={() => setFilter('all')}
                   className={`px-2.5 py-1 rounded-md font-medium ${filter === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
                 >
-                  All ({all.length})
+                  All ({groups.length})
                 </button>
               </div>
               <div className="flex items-center gap-2 text-xs">
@@ -195,96 +300,187 @@ export default function RecategorizePreview({
               </div>
             </div>
 
-            {/* List */}
+            {/* Group list */}
             <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-              {visible.map(p => {
-                const t = p.transaction
-                const effective = effectiveCategory(p)
-                const isChange = effective !== t.category
-                const isOverridden = overrides.has(t.id)
-                const isAccepted = isChange && !rejected.has(t.id)
+              {visibleGroups.map(g => {
+                const acceptedInGroup = g.proposals.filter(p => !rejected.has(p.transaction.id)).length
+                const allRejected = acceptedInGroup === 0
+                const allAccepted = acceptedInGroup === g.proposals.length
+                const indeterminate = !allAccepted && !allRejected
+
+                const isOverridden = groupOverrides.has(g.key)
+                const effectiveGroupCat = groupOverrides.get(g.key) ?? g.dominantAi
+                const isChange = groupHasAnyChange(g)
+                const isExpanded = expanded.has(g.key)
+                const isMulti = g.proposals.length > 1
+
+                const ChkIcon = allAccepted ? CheckSquare : indeterminate ? MinusSquare : Square
+
                 return (
                   <div
-                    key={t.id}
-                    className={`border rounded-xl px-3 py-2.5 flex items-center gap-3 transition-colors ${
+                    key={g.key}
+                    className={`border rounded-xl transition-colors ${
                       !isChange
                         ? 'bg-gray-50 border-gray-200 opacity-70'
-                        : isOverridden
-                          ? 'bg-amber-50/60 border-amber-300'
-                          : isAccepted
-                            ? 'bg-purple-50/50 border-purple-300'
-                            : 'bg-white border-gray-200'
+                        : allRejected
+                          ? 'bg-white border-gray-200'
+                          : isOverridden
+                            ? 'bg-amber-50/60 border-amber-300'
+                            : 'bg-purple-50/40 border-purple-300'
                     }`}
                   >
-                    {isChange ? (
-                      <button
-                        onClick={() => toggle(t.id)}
-                        className={`shrink-0 p-1 rounded ${isAccepted ? (isOverridden ? 'text-amber-600' : 'text-purple-600') : 'text-gray-300 hover:text-gray-500'}`}
-                        title={isAccepted ? 'Skip this change' : 'Include this change'}
-                      >
-                        {isAccepted ? <CheckSquare size={18} /> : <Square size={18} />}
-                      </button>
-                    ) : (
-                      <span className="w-7 shrink-0 text-center text-xs text-gray-300">—</span>
-                    )}
-
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
-                      <div className="flex items-center gap-1.5 mt-1 flex-wrap text-xs">
-                        <span className="inline-flex items-center gap-1 text-gray-600">
-                          <span className="text-base leading-none">{emojiFor(t.category)}</span>
-                          <span className="truncate max-w-[110px]">{t.category}</span>
-                        </span>
-                        <ArrowRight size={12} className={`shrink-0 ${isOverridden ? 'text-amber-500' : 'text-purple-500'}`} />
-                        <select
-                          value={effective}
-                          onChange={e => {
-                            const value = e.target.value
-                            if (value === p.newCategory) clearOverride(t.id)
-                            else setOverride(t.id, value)
-                          }}
-                          className={`text-xs font-medium border rounded px-1.5 py-1 max-w-[180px] focus:outline-none focus:ring-2 ${
-                            isOverridden
-                              ? 'text-amber-700 bg-amber-50 border-amber-300 focus:ring-amber-400'
-                              : 'text-purple-700 bg-purple-50 border-purple-200 focus:ring-purple-400'
+                    {/* Group header row */}
+                    <div className="px-3 py-2.5 flex items-center gap-3">
+                      {isChange ? (
+                        <button
+                          onClick={() => toggleGroup(g)}
+                          className={`shrink-0 p-1 rounded ${
+                            allAccepted
+                              ? isOverridden ? 'text-amber-600' : 'text-purple-600'
+                              : indeterminate
+                                ? 'text-purple-500'
+                                : 'text-gray-300 hover:text-gray-500'
                           }`}
-                          title="Change the destination category"
+                          title={allAccepted ? 'Skip all in this group' : 'Include all in this group'}
                         >
-                          {knownCategories.map(c => (
-                            <option key={c.name} value={c.name}>
-                              {c.emoji} {c.name}
-                            </option>
-                          ))}
-                        </select>
-                        {isOverridden && (
-                          <button
-                            onClick={() => clearOverride(t.id)}
-                            className="text-amber-700 hover:text-amber-900 inline-flex items-center gap-0.5"
-                            title={`Revert to AI suggestion (${p.newCategory})`}
+                          <ChkIcon size={18} />
+                        </button>
+                      ) : (
+                        <span className="w-7 shrink-0 text-center text-xs text-gray-300">—</span>
+                      )}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-semibold text-gray-900 truncate max-w-[200px]" title={g.merchantLabel}>
+                            {g.merchantLabel}
+                          </p>
+                          <span className="text-xs text-gray-500">
+                            ({g.proposals.length} txn{g.proposals.length === 1 ? '' : 's'})
+                          </span>
+                          {indeterminate && (
+                            <span className="text-[10px] uppercase tracking-wider text-purple-700 bg-purple-100 px-1.5 py-0.5 rounded">
+                              {acceptedInGroup}/{g.proposals.length} selected
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap text-xs">
+                          <span className="inline-flex items-center gap-1 text-gray-600">
+                            <span className="text-base leading-none">
+                              {g.uniformCurrent ? emojiFor(g.uniformCurrent) : '🔀'}
+                            </span>
+                            <span className="truncate max-w-[100px]">
+                              {g.uniformCurrent ?? 'Various'}
+                            </span>
+                          </span>
+                          <ArrowRight size={12} className={`shrink-0 ${isOverridden ? 'text-amber-500' : 'text-purple-500'}`} />
+                          <select
+                            value={effectiveGroupCat}
+                            onChange={e => {
+                              const value = e.target.value
+                              if (value === g.dominantAi && !g.hasMixedAi) clearGroupOverride(g)
+                              else setGroupOverride(g, value)
+                            }}
+                            className={`text-xs font-medium border rounded px-1.5 py-1 max-w-[170px] focus:outline-none focus:ring-2 ${
+                              isOverridden
+                                ? 'text-amber-700 bg-amber-50 border-amber-300 focus:ring-amber-400'
+                                : 'text-purple-700 bg-purple-50 border-purple-200 focus:ring-purple-400'
+                            }`}
+                            title="Set destination for all members of this group"
                           >
-                            <RotateCcw size={11} />
-                          </button>
-                        )}
-                        <span className="text-gray-300">·</span>
-                        <span className="text-gray-400">{t.date}</span>
-                        {!isOverridden && p.newCategory !== t.category && (
-                          <>
-                            <span className="text-gray-300">·</span>
-                            <span className="text-gray-400">AI conf {(p.confidence * 100).toFixed(0)}%</span>
-                          </>
-                        )}
-                        {isOverridden && (
-                          <>
-                            <span className="text-gray-300">·</span>
+                            {knownCategories.map(c => (
+                              <option key={c.name} value={c.name}>
+                                {c.emoji} {c.name}
+                              </option>
+                            ))}
+                          </select>
+                          {isOverridden && (
+                            <button
+                              onClick={() => clearGroupOverride(g)}
+                              className="text-amber-700 hover:text-amber-900 inline-flex items-center gap-0.5"
+                              title={`Revert to AI suggestion (${g.dominantAi})`}
+                            >
+                              <RotateCcw size={11} />
+                            </button>
+                          )}
+                          {g.hasMixedAi && !isOverridden && (
+                            <span className="text-amber-600 italic">AI picks varied — override to unify</span>
+                          )}
+                          {isOverridden && (
                             <span className="text-amber-700 font-medium">your pick</span>
-                          </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`text-sm font-semibold ${g.proposals[0].transaction.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                          ${g.totalAbsAmount.toFixed(2)}
+                        </span>
+                        {isMulti && (
+                          <button
+                            onClick={() => toggleExpanded(g.key)}
+                            className="text-gray-400 hover:text-gray-700 p-1 rounded hover:bg-gray-100"
+                            title={isExpanded ? 'Collapse' : 'Expand to pick individual transactions'}
+                          >
+                            {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                          </button>
                         )}
                       </div>
                     </div>
 
-                    <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                      {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
-                    </span>
+                    {/* Expanded children */}
+                    {isMulti && isExpanded && (
+                      <div className="border-t border-gray-100 divide-y divide-gray-50 max-h-72 overflow-y-auto bg-white/60">
+                        {g.proposals.map(p => {
+                          const t = p.transaction
+                          const isRejected = rejected.has(t.id)
+                          const rowChange = rowIsChange(g, p)
+                          return (
+                            <div
+                              key={t.id}
+                              className={`px-3 py-1.5 pl-12 flex items-center gap-3 text-xs ${
+                                isRejected ? 'opacity-50' : ''
+                              }`}
+                            >
+                              <button
+                                onClick={() => toggleRow(t.id)}
+                                disabled={!rowChange}
+                                className={`shrink-0 p-0.5 rounded ${
+                                  !rowChange
+                                    ? 'text-gray-200 cursor-not-allowed'
+                                    : !isRejected
+                                      ? isOverridden ? 'text-amber-600' : 'text-purple-600'
+                                      : 'text-gray-300 hover:text-gray-500'
+                                }`}
+                                title={rowChange ? (isRejected ? 'Include this one' : 'Skip this one') : 'Already in target category'}
+                              >
+                                {!isRejected && rowChange ? <CheckSquare size={14} /> : <Square size={14} />}
+                              </button>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-gray-800 truncate">{t.description}</p>
+                                <div className="flex gap-2 text-gray-400">
+                                  <span>{t.date}</span>
+                                  {!isOverridden && g.hasMixedAi && (
+                                    <>
+                                      <span>·</span>
+                                      <span className="text-purple-500">AI: {p.newCategory}</span>
+                                    </>
+                                  )}
+                                  {!rowChange && (
+                                    <>
+                                      <span>·</span>
+                                      <span>Already in target</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                              <span className={`font-medium shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-700'}`}>
+                                {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -293,11 +489,11 @@ export default function RecategorizePreview({
             {/* Footer */}
             <div className="border-t border-gray-100 p-4 flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs text-gray-500">
-                <span className="font-medium text-gray-800">{accepted.length}</span> change{accepted.length === 1 ? '' : 's'} ready
-                {overrides.size > 0 && (
+                <span className="font-medium text-gray-800">{acceptedRowCount}</span> change{acceptedRowCount === 1 ? '' : 's'} ready
+                {overrideCount > 0 && (
                   <>
                     {' · '}
-                    <span className="font-medium text-amber-700">{overrides.size}</span> your pick{overrides.size === 1 ? '' : 's'}
+                    <span className="font-medium text-amber-700">{overrideCount}</span> group{overrideCount === 1 ? '' : 's'} overridden
                   </>
                 )}
               </p>
@@ -311,7 +507,7 @@ export default function RecategorizePreview({
                 </button>
                 <button
                   onClick={handleApply}
-                  disabled={applying || accepted.length === 0}
+                  disabled={applying || acceptedRowCount === 0}
                   className="text-sm font-semibold bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white rounded-lg px-4 py-2 flex items-center gap-1.5"
                 >
                   {applying ? (
@@ -320,7 +516,7 @@ export default function RecategorizePreview({
                       Applying…
                     </>
                   ) : (
-                    <>Apply {accepted.length} change{accepted.length === 1 ? '' : 's'}</>
+                    <>Apply {acceptedRowCount} change{acceptedRowCount === 1 ? '' : 's'}</>
                   )}
                 </button>
               </div>

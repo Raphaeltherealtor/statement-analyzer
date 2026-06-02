@@ -1,6 +1,7 @@
-// v10 — AI Re-categorize: per-row dropdown to override AI's suggestion
-// to any category instead of only accept/reject.
-const CACHE_NAME = 'statement-analyzer-v10'
+// v11 — AI Re-categorize: group proposals by normalized merchant so 47
+// Amazon rows collapse into one expandable row with group-level accept,
+// override, and per-row cherry-picking.
+const CACHE_NAME = 'statement-analyzer-v11'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
