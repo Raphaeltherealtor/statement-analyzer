@@ -1,6 +1,6 @@
-// v9 — AI Re-categorize: smaller 100-txn batches throttled to 3 parallel
-// with progress UI, so big datasets don't time out.
-const CACHE_NAME = 'statement-analyzer-v9'
+// v10 — AI Re-categorize: per-row dropdown to override AI's suggestion
+// to any category instead of only accept/reject.
+const CACHE_NAME = 'statement-analyzer-v10'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {

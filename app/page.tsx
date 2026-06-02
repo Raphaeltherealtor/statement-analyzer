@@ -1061,6 +1061,7 @@ export default function Home() {
           loading={recatLoading}
           progress={recatProgress}
           proposals={recatProposals}
+          knownCategories={pickerCategories}
           emojiFor={emojiFor}
           onClose={() => {
             setRecatOpen(false)

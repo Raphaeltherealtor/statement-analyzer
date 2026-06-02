@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X, ArrowRight, RefreshCw, Sparkles, CheckSquare, Square } from 'lucide-react'
+import { X, ArrowRight, RefreshCw, Sparkles, CheckSquare, Square, RotateCcw } from 'lucide-react'
 import { Transaction } from '@/lib/types'
 
 export interface RecategorizeProposal {
@@ -16,6 +16,7 @@ interface RecategorizePreviewProps {
   loading: boolean
   progress?: { done: number; total: number } | null
   proposals: RecategorizeProposal[] | null
+  knownCategories: { name: string; emoji: string }[]
   emojiFor: (name: string) => string
   onApply: (accepted: RecategorizeProposal[]) => void | Promise<void>
 }
@@ -27,17 +28,30 @@ export default function RecategorizePreview({
   loading,
   progress,
   proposals,
+  knownCategories,
   emojiFor,
   onApply,
 }: RecategorizePreviewProps) {
-  // Rejected IDs are what the user explicitly UNchecked (default = all changes
-  // accepted). Unchanged proposals are not in the list to begin with.
+  // Rejected IDs are what the user explicitly UNchecked. Override map is
+  // for per-row category changes — when the AI suggests something the user
+  // disagrees with, they pick the correct destination from the dropdown
+  // and that wins over the AI's pick.
   const [rejected, setRejected] = useState<Set<string>>(new Set())
+  const [overrides, setOverrides] = useState<Map<string, string>>(new Map())
   const [applying, setApplying] = useState(false)
   const [filter, setFilter] = useState<'changes' | 'all'>('changes')
 
-  const changes = (proposals || []).filter(p => p.newCategory !== p.transaction.category)
-  const visible = filter === 'changes' ? changes : (proposals || [])
+  const all = proposals || []
+
+  // The user's manual choice always wins. If no override, fall back to AI.
+  const effectiveCategory = (p: RecategorizeProposal): string =>
+    overrides.get(p.transaction.id) ?? p.newCategory
+
+  // A "change" is any row where the effective destination differs from the
+  // current category. Includes both AI-suggested changes and user overrides
+  // that touch otherwise-unchanged rows.
+  const changes = all.filter(p => effectiveCategory(p) !== p.transaction.category)
+  const visible = filter === 'changes' ? changes : all
   const accepted = changes.filter(p => !rejected.has(p.transaction.id))
 
   const toggle = (id: string) => {
@@ -49,13 +63,42 @@ export default function RecategorizePreview({
     })
   }
 
+  const setOverride = (id: string, category: string) => {
+    setOverrides(prev => {
+      const next = new Map(prev)
+      next.set(id, category)
+      return next
+    })
+    // If the user is actively setting a destination, they're implicitly
+    // accepting the row — undo any previous rejection.
+    setRejected(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  const clearOverride = (id: string) => {
+    setOverrides(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Map(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
   const acceptAll = () => setRejected(new Set())
   const rejectAll = () => setRejected(new Set(changes.map(p => p.transaction.id)))
 
   const handleApply = async () => {
     setApplying(true)
     try {
-      await onApply(accepted)
+      const finalAccepted = accepted.map(p => ({
+        ...p,
+        newCategory: effectiveCategory(p),
+      }))
+      await onApply(finalAccepted)
     } finally {
       setApplying(false)
     }
@@ -73,7 +116,7 @@ export default function RecategorizePreview({
               {!loading && proposals && (
                 <p className="text-xs text-gray-500 mt-0.5">
                   Reviewed {proposals.length} transaction{proposals.length === 1 ? '' : 's'} ·{' '}
-                  <span className="font-medium text-purple-700">{changes.length}</span> suggested change{changes.length === 1 ? '' : 's'}
+                  <span className="font-medium text-purple-700">{changes.length}</span> change{changes.length === 1 ? '' : 's'} pending
                 </p>
               )}
             </div>
@@ -113,19 +156,9 @@ export default function RecategorizePreview({
           <div className="flex-1 flex items-center justify-center p-10 text-gray-400 text-sm">
             No proposals to show.
           </div>
-        ) : changes.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
-            <div className="text-5xl mb-3">✨</div>
-            <p className="text-lg font-medium text-gray-800">Nothing to change</p>
-            <p className="text-sm text-gray-500 mt-1">
-              AI thinks every transaction is already in the right bucket.
-            </p>
-            <button
-              onClick={onClose}
-              className="mt-6 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg"
-            >
-              Close
-            </button>
+        ) : all.length === 0 ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-10 text-gray-400 text-sm">
+            No transactions to review.
           </div>
         ) : (
           <>
@@ -142,7 +175,7 @@ export default function RecategorizePreview({
                   onClick={() => setFilter('all')}
                   className={`px-2.5 py-1 rounded-md font-medium ${filter === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600'}`}
                 >
-                  All ({proposals.length})
+                  All ({all.length})
                 </button>
               </div>
               <div className="flex items-center gap-2 text-xs">
@@ -166,7 +199,9 @@ export default function RecategorizePreview({
             <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
               {visible.map(p => {
                 const t = p.transaction
-                const isChange = p.newCategory !== t.category
+                const effective = effectiveCategory(p)
+                const isChange = effective !== t.category
+                const isOverridden = overrides.has(t.id)
                 const isAccepted = isChange && !rejected.has(t.id)
                 return (
                   <div
@@ -174,16 +209,18 @@ export default function RecategorizePreview({
                     className={`border rounded-xl px-3 py-2.5 flex items-center gap-3 transition-colors ${
                       !isChange
                         ? 'bg-gray-50 border-gray-200 opacity-70'
-                        : isAccepted
-                          ? 'bg-purple-50/50 border-purple-300'
-                          : 'bg-white border-gray-200'
+                        : isOverridden
+                          ? 'bg-amber-50/60 border-amber-300'
+                          : isAccepted
+                            ? 'bg-purple-50/50 border-purple-300'
+                            : 'bg-white border-gray-200'
                     }`}
                   >
                     {isChange ? (
                       <button
                         onClick={() => toggle(t.id)}
-                        className={`shrink-0 p-1 rounded ${isAccepted ? 'text-purple-600' : 'text-gray-300 hover:text-gray-500'}`}
-                        title={isAccepted ? 'Reject this change' : 'Accept this change'}
+                        className={`shrink-0 p-1 rounded ${isAccepted ? (isOverridden ? 'text-amber-600' : 'text-purple-600') : 'text-gray-300 hover:text-gray-500'}`}
+                        title={isAccepted ? 'Skip this change' : 'Include this change'}
                       >
                         {isAccepted ? <CheckSquare size={18} /> : <Square size={18} />}
                       </button>
@@ -193,26 +230,53 @@ export default function RecategorizePreview({
 
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap text-xs">
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap text-xs">
                         <span className="inline-flex items-center gap-1 text-gray-600">
                           <span className="text-base leading-none">{emojiFor(t.category)}</span>
-                          <span className="truncate max-w-[120px]">{t.category}</span>
+                          <span className="truncate max-w-[110px]">{t.category}</span>
                         </span>
-                        {isChange && (
-                          <>
-                            <ArrowRight size={12} className="text-purple-500 shrink-0" />
-                            <span className="inline-flex items-center gap-1 text-purple-700 font-medium">
-                              <span className="text-base leading-none">{emojiFor(p.newCategory)}</span>
-                              <span className="truncate max-w-[140px]">{p.newCategory}</span>
-                            </span>
-                          </>
+                        <ArrowRight size={12} className={`shrink-0 ${isOverridden ? 'text-amber-500' : 'text-purple-500'}`} />
+                        <select
+                          value={effective}
+                          onChange={e => {
+                            const value = e.target.value
+                            if (value === p.newCategory) clearOverride(t.id)
+                            else setOverride(t.id, value)
+                          }}
+                          className={`text-xs font-medium border rounded px-1.5 py-1 max-w-[180px] focus:outline-none focus:ring-2 ${
+                            isOverridden
+                              ? 'text-amber-700 bg-amber-50 border-amber-300 focus:ring-amber-400'
+                              : 'text-purple-700 bg-purple-50 border-purple-200 focus:ring-purple-400'
+                          }`}
+                          title="Change the destination category"
+                        >
+                          {knownCategories.map(c => (
+                            <option key={c.name} value={c.name}>
+                              {c.emoji} {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        {isOverridden && (
+                          <button
+                            onClick={() => clearOverride(t.id)}
+                            className="text-amber-700 hover:text-amber-900 inline-flex items-center gap-0.5"
+                            title={`Revert to AI suggestion (${p.newCategory})`}
+                          >
+                            <RotateCcw size={11} />
+                          </button>
                         )}
                         <span className="text-gray-300">·</span>
                         <span className="text-gray-400">{t.date}</span>
-                        {isChange && (
+                        {!isOverridden && p.newCategory !== t.category && (
                           <>
                             <span className="text-gray-300">·</span>
                             <span className="text-gray-400">AI conf {(p.confidence * 100).toFixed(0)}%</span>
+                          </>
+                        )}
+                        {isOverridden && (
+                          <>
+                            <span className="text-gray-300">·</span>
+                            <span className="text-amber-700 font-medium">your pick</span>
                           </>
                         )}
                       </div>
@@ -229,7 +293,13 @@ export default function RecategorizePreview({
             {/* Footer */}
             <div className="border-t border-gray-100 p-4 flex items-center justify-between gap-3 flex-wrap">
               <p className="text-xs text-gray-500">
-                <span className="font-medium text-gray-800">{accepted.length}</span> change{accepted.length === 1 ? '' : 's'} ready to apply
+                <span className="font-medium text-gray-800">{accepted.length}</span> change{accepted.length === 1 ? '' : 's'} ready
+                {overrides.size > 0 && (
+                  <>
+                    {' · '}
+                    <span className="font-medium text-amber-700">{overrides.size}</span> your pick{overrides.size === 1 ? '' : 's'}
+                  </>
+                )}
               </p>
               <div className="flex gap-2">
                 <button
