@@ -33,6 +33,40 @@ const STOPWORDS = new Set([
   'store', 'storefront', 'shop',
 ])
 
+// Generic bank / financial / processor names where the FIRST word alone is
+// ambiguous — same name covers multiple distinct products (Capital One has
+// credit cards AND auto loans AND mortgages; Wells Fargo has cards AND
+// mortgage AND ATM; Chase has cards AND mortgage AND brokerage). For these,
+// the qualifier after the company name is what actually identifies the
+// product — "Capital One Mobile Pymt" vs "Capital One Auto Pymt" must
+// normalize to different keys or they collapse into the same merchant
+// group and the user can't tell which payment is which.
+const NEEDS_QUALIFIER = new Set([
+  'capital',   // Capital One (cards / auto / mortgage)
+  'wells',     // Wells Fargo (cards / mortgage / atm / personal)
+  'chase',     // Chase (cards / mortgage / personal loans / brokerage)
+  'bank',      // generic "bank of X" / "bank pmt"
+  'discover',  // Discover (cards / personal loans / online savings)
+  'citi',      // Citi (cards / mortgage)
+  'american',  // American Express / American Airlines / etc.
+  'usaa',      // USAA (banking / insurance / auto / member)
+  'navy',      // Navy Federal Credit Union
+  'pnc',       // PNC Bank
+  'truist',    // Truist (BB&T + SunTrust)
+  'fidelity',  // Fidelity (brokerage / retirement / cash mgmt)
+  'schwab',    // Charles Schwab (brokerage / banking)
+  'vanguard',  // Vanguard (brokerage / retirement)
+  'sofi',      // SoFi (banking / student loans / auto loans)
+  'ally',      // Ally (banking / auto loans / mortgage)
+  'marcus',    // Marcus by Goldman Sachs
+  'synchrony', // Synchrony (multiple branded cards)
+  'mercury',   // Mercury (business banking)
+])
+
+// When the first word IS a qualifier-needing name, take this many words to
+// keep enough product context (e.g. "capital one mobile pymt").
+const QUALIFIER_KEEP_WORDS = 4
+
 export function normalizeMerchant(description: string): string {
   if (!description) return ''
 
@@ -53,6 +87,12 @@ export function normalizeMerchant(description: string): string {
   const words = s.split(' ').filter(w => w.length > 1 && !STOPWORDS.has(w))
 
   if (words.length === 0) return ''
+
+  // Generic bank/financial name as first word — keep the product qualifier
+  // so "Capital One Mobile Pymt" vs "Capital One Auto Pymt" stay separate.
+  if (NEEDS_QUALIFIER.has(words[0])) {
+    return words.slice(0, QUALIFIER_KEEP_WORDS).join(' ')
+  }
 
   // If the first significant word is long enough to be uniquely a brand, use it alone.
   // Otherwise combine the first two so we don't collide short names like "amzn" / "shell".
