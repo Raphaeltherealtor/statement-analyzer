@@ -1,8 +1,7 @@
-// v15 — Tax Checklist gets a flat "Curate transactions" view with
-// search + filter + per-row checkbox + inline category dropdown. The
-// per-row expansion in the Checklist view also gets the category
-// dropdown for in-line fixes without leaving the page.
-const CACHE_NAME = 'statement-analyzer-v15'
+// v16 — Tax Checklist money inputs get $ prefix + comma formatting via
+// a shared MoneyInput component. Auto rows are now editable too — typing
+// a value stores a per-row override (with a revert arrow to drop back).
+const CACHE_NAME = 'statement-analyzer-v16'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {

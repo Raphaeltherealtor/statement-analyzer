@@ -75,6 +75,12 @@ export interface WorkspaceData {
   // Auto subtotals skip these, and the printed checklist reflects the
   // curated total — not the raw category total.
   excludedTxnIds?: string[]
+  // Per-row dollar overrides keyed by checklist row label. When present,
+  // the override wins over the auto-computed transaction sum. Lets the
+  // user type a final number (e.g. from a paper receipt or year-end
+  // summary) instead of being stuck with whatever the card statements add
+  // up to. A small "revert" arrow in the UI drops the override.
+  autoOverrides?: Record<string, number>
   notes?: string
 }
 

@@ -16,7 +16,9 @@ import {
   Search,
   ListChecks,
   FileText,
+  RotateCcw,
 } from 'lucide-react'
+import MoneyInput from '@/components/MoneyInput'
 import { CHECKLIST, ChecklistRow, SECTIONS_IN_SCHEDULE_C_TOTAL } from '@/lib/checklist-template'
 import { WorkspaceData } from '@/lib/tax-workspace'
 import {
@@ -281,11 +283,22 @@ export default function TaxChecklistPage() {
     return []
   }
 
+  // The auto-computed sum for a category/aggregate row, ignoring any
+  // override the user has typed.
+  const autoSumForRow = (row: ChecklistRow): number => {
+    if (row.source.kind !== 'category' && row.source.kind !== 'aggregate') return 0
+    const included = txnsBackingRow(row).filter(t => !excludedIds.has(t.id))
+    return sumTxns(included)
+  }
+
   const rowValueAndKind = (row: ChecklistRow): RowValue => {
     const s = row.source
     if (s.kind === 'category' || s.kind === 'aggregate') {
-      const included = txnsBackingRow(row).filter(t => !excludedIds.has(t.id))
-      return { kind: 'number', value: sumTxns(included) }
+      const override = workspace.autoOverrides?.[row.label]
+      if (typeof override === 'number') {
+        return { kind: 'number', value: override }
+      }
+      return { kind: 'number', value: autoSumForRow(row) }
     }
     if (s.kind === 'manual') {
       return { kind: 'number', value: workspace.manualItems?.[s.key] ?? 0 }
@@ -297,6 +310,24 @@ export default function TaxChecklistPage() {
       return { kind: 'number', value: typeof raw === 'number' ? raw : 0 }
     }
     return { kind, value: typeof raw === 'string' ? raw : null }
+  }
+
+  const updateAutoOverride = (label: string, value: number) => {
+    setWorkspace(w => ({
+      ...w,
+      autoOverrides: { ...(w.autoOverrides || {}), [label]: value },
+    }))
+    setDirty(true)
+  }
+
+  const clearAutoOverride = (label: string) => {
+    setWorkspace(w => {
+      if (!w.autoOverrides || !(label in w.autoOverrides)) return w
+      const next = { ...w.autoOverrides }
+      delete next[label]
+      return { ...w, autoOverrides: next }
+    })
+    setDirty(true)
   }
 
   // Section subtotals (only meaningful for money sections — skip non-money rows)
@@ -622,9 +653,15 @@ export default function TaxChecklistPage() {
                                     )}
                                     <span>{row.label}</span>
                                     {isAuto && (
-                                      <span className="text-[10px] uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded print:hidden">
-                                        auto
-                                      </span>
+                                      typeof workspace.autoOverrides?.[row.label] === 'number' ? (
+                                        <span className="text-[10px] uppercase tracking-wider text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded print:hidden">
+                                          manual override
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded print:hidden">
+                                          auto
+                                        </span>
+                                      )
                                     )}
                                     {hasExpandable && partial && (
                                       <span className="text-[10px] uppercase tracking-wider text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded print:hidden">
@@ -639,24 +676,48 @@ export default function TaxChecklistPage() {
                                 <td className="px-4 py-2 text-right align-top w-44">
                                   {v.kind === 'number' ? (
                                     isAuto ? (
-                                      <span className="font-mono text-gray-900">
-                                        {(v.value as number) > 0
-                                          ? `$${(v.value as number).toFixed(2)}`
-                                          : <span className="text-gray-300">—</span>}
-                                      </span>
+                                      (() => {
+                                        const isOverridden = typeof workspace.autoOverrides?.[row.label] === 'number'
+                                        const autoSum = autoSumForRow(row)
+                                        return (
+                                          <div className="flex items-center justify-end gap-1">
+                                            {isOverridden && (
+                                              <button
+                                                onClick={() => clearAutoOverride(row.label)}
+                                                className="text-amber-600 hover:text-amber-800 print:hidden"
+                                                title={`Revert to the auto-computed total ($${autoSum.toFixed(2)})`}
+                                              >
+                                                <RotateCcw size={12} />
+                                              </button>
+                                            )}
+                                            <MoneyInput
+                                              value={v.value as number}
+                                              onChange={n => {
+                                                // Treat clearing the field (0) as a revert to auto only if
+                                                // there's no override already. If user is actively typing 0
+                                                // as an override, the explicit revert button is the way out.
+                                                if (n === 0 && !isOverridden) {
+                                                  clearAutoOverride(row.label)
+                                                } else {
+                                                  updateAutoOverride(row.label, n)
+                                                }
+                                              }}
+                                              overridden={isOverridden}
+                                              ariaLabel={row.label}
+                                              className="w-32 text-right font-mono text-sm border border-gray-200 rounded py-1 pr-2 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                          </div>
+                                        )
+                                      })()
                                     ) : (
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        value={(v.value as number) || ''}
-                                        placeholder="0.00"
-                                        onChange={e => {
-                                          const num = parseFloat(e.target.value)
-                                          const val = Number.isFinite(num) ? num : 0
-                                          if (row.source.kind === 'manual') updateManual(row.source.key, val)
-                                          else if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, val)
+                                      <MoneyInput
+                                        value={v.value as number}
+                                        onChange={n => {
+                                          if (row.source.kind === 'manual') updateManual(row.source.key, n)
+                                          else if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, n)
                                         }}
-                                        className="w-32 text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        ariaLabel={row.label}
+                                        className="w-32 text-right font-mono text-sm border border-gray-200 rounded py-1 pr-2 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       />
                                     )
                                   ) : v.kind === 'date' ? (
