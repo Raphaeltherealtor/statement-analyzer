@@ -18,6 +18,7 @@ import {
   Square,
   ListChecks,
   Sparkles,
+  FileText,
 } from 'lucide-react'
 import UploadZone from '@/components/UploadZone'
 import CategoryCard from '@/components/CategoryCard'
@@ -650,6 +651,14 @@ export default function Home() {
             <p className="text-gray-500 mt-1">Upload bank statements & Amazon orders — AI categorizes everything for taxes</p>
           </div>
           <div className="flex items-center gap-3 flex-wrap">
+            <Link
+              href="/tax-checklist"
+              className="flex items-center gap-1.5 text-sm font-medium text-white bg-gray-900 hover:bg-black rounded-lg px-3 py-2"
+              title="CPA-ready deduction checklist with per-year saving"
+            >
+              <FileText size={14} />
+              Tax Checklist
+            </Link>
             <Link
               href="/history"
               className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 bg-white rounded-lg px-3 py-2"

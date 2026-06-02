@@ -1,6 +1,6 @@
-// v7 — client-side batching for AI Re-categorize so >500 transactions
-// auto-chunk into parallel API calls.
-const CACHE_NAME = 'statement-analyzer-v7'
+// v8 — added /tax-checklist with per-year workspace and CPA-formatted
+// printable deduction checklist.
+const CACHE_NAME = 'statement-analyzer-v8'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
