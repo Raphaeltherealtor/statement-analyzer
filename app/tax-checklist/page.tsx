@@ -13,10 +13,19 @@ import {
   CheckSquare,
   Square,
   MinusSquare,
+  Search,
+  ListChecks,
+  FileText,
 } from 'lucide-react'
 import { CHECKLIST, ChecklistRow, SECTIONS_IN_SCHEDULE_C_TOTAL } from '@/lib/checklist-template'
 import { WorkspaceData } from '@/lib/tax-workspace'
-import { Transaction } from '@/lib/types'
+import {
+  Transaction,
+  CustomCategory,
+  DEFAULT_CATEGORIES,
+  DEFAULT_CATEGORY_EMOJIS,
+} from '@/lib/types'
+import { loadCustomCategories } from '@/lib/storage'
 
 const NOW_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = [NOW_YEAR + 1, NOW_YEAR, NOW_YEAR - 1, NOW_YEAR - 2, NOW_YEAR - 3]
@@ -68,17 +77,34 @@ function inferInputType(path: string): 'date' | 'text' | 'money' {
   return 'money'
 }
 
+interface CompletedJob {
+  id: string
+  fileNames: string[]
+  completedAt: number
+  transactions: Transaction[]
+  errors: { file: string; error: string }[]
+}
+
 export default function TaxChecklistPage() {
   const [year, setYear] = useState<number>(NOW_YEAR)
   const [workspace, setWorkspace] = useState<WorkspaceData>({})
   const [savedYears, setSavedYears] = useState<number[]>([])
-  const [transactions, setTransactions] = useState<Transaction[]>([])
+  // Hold the entire jobs payload so we can map a transaction back to its
+  // owning sa_parse_jobs row when the user edits a category inline.
+  const [jobs, setJobs] = useState<CompletedJob[]>([])
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
   // Which auto rows are currently expanded (showing their underlying txns).
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  // Top-level view: 'checklist' (CPA-formatted) or 'curate' (flat editor
+  // for picking/recategorizing every txn in the year).
+  const [view, setView] = useState<'checklist' | 'curate'>('checklist')
+  // Curate-view filter state
+  const [curateSearch, setCurateSearch] = useState('')
+  const [curateCategoryFilter, setCurateCategoryFilter] = useState<string>('all')
 
   // Load workspace + all transactions whenever the year changes
   useEffect(() => {
@@ -101,10 +127,9 @@ export default function TaxChecklistPage() {
         setWorkspace(wsData.workspace || {})
         setDirty(false)
 
-        const allTxns: Transaction[] = ((txnsData.jobs as Array<{ transactions?: Transaction[] }>) || [])
-          .flatMap(j => j.transactions || [])
-        const yearStr = String(year)
-        setTransactions(allTxns.filter(t => t.date?.startsWith(yearStr)))
+        const incomingJobs = ((txnsData.jobs as CompletedJob[]) || [])
+        setJobs(incomingJobs)
+        setCustomCategories(loadCustomCategories())
 
         setSavedYears(((listData.years as number[]) || []).slice())
       } finally {
@@ -162,6 +187,60 @@ export default function TaxChecklistPage() {
       return next
     })
   }
+
+  // Year-scoped transaction list — derived from all loaded jobs.
+  const transactions = useMemo(
+    () => jobs.flatMap(j => j.transactions || []).filter(t => t.date?.startsWith(String(year))),
+    [jobs, year]
+  )
+
+  // All categories the picker should show (defaults + customs).
+  const pickerCategories = useMemo(() => {
+    const all = [
+      ...DEFAULT_CATEGORIES.filter(c => c !== 'Uncategorized').map(name => ({
+        name,
+        emoji: DEFAULT_CATEGORY_EMOJIS[name],
+      })),
+      ...customCategories.map(c => ({ name: c.name, emoji: c.emoji })),
+    ]
+    const seen = new Set<string>()
+    return all.filter(c => {
+      if (seen.has(c.name)) return false
+      seen.add(c.name)
+      return true
+    })
+  }, [customCategories])
+
+  // Re-categorize a single transaction inline and persist the owning job.
+  // Used by both the per-row expansion in the checklist and the curate
+  // view's flat list.
+  const updateTransactionCategory = (txnId: string, newCategory: string) => {
+    let touchedJob: CompletedJob | null = null
+    const updated = jobs.map(job => {
+      if (!job.transactions.some(t => t.id === txnId)) return job
+      const newTxns = job.transactions.map(t =>
+        t.id === txnId ? { ...t, category: newCategory, needsReview: false } : t
+      )
+      const next = { ...job, transactions: newTxns }
+      touchedJob = next
+      return next
+    })
+    setJobs(updated)
+
+    if (touchedJob) {
+      // The closure captures touchedJob at write time, so we re-cast to
+      // satisfy TS — null check above already gates this.
+      const tj = touchedJob as CompletedJob
+      fetch(`/api/parse/jobs?jobId=${encodeURIComponent(tj.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: tj.transactions }),
+      }).catch(() => {})
+    }
+  }
+
+  const emojiFor = (name: string) =>
+    DEFAULT_CATEGORY_EMOJIS[name] ?? customCategories.find(c => c.name === name)?.emoji ?? '📌'
 
   const handleSave = async () => {
     setSaving(true)
@@ -371,8 +450,134 @@ export default function TaxChecklistPage() {
               </div>
             </div>
 
+            {/* View toggle — Checklist (CPA-formatted) vs Curate (flat editor) */}
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-4 max-w-md print:hidden">
+              <button
+                onClick={() => setView('checklist')}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${
+                  view === 'checklist' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <FileText size={14} />
+                Checklist
+              </button>
+              <button
+                onClick={() => setView('curate')}
+                className={`flex-1 flex items-center justify-center gap-1.5 text-sm font-medium px-3 py-2 rounded-lg transition-colors ${
+                  view === 'curate' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <ListChecks size={14} />
+                Curate transactions ({transactions.length})
+              </button>
+            </div>
+
+            {/* Curate view — flat editor over all year's transactions */}
+            {view === 'curate' && (() => {
+              const term = curateSearch.trim().toLowerCase()
+              const filtered = transactions.filter(t => {
+                if (curateCategoryFilter !== 'all' && t.category !== curateCategoryFilter) return false
+                if (term) {
+                  const hay = `${t.description} ${t.subcategory || ''} ${t.category} ${t.source}`.toLowerCase()
+                  if (!hay.includes(term)) return false
+                }
+                return true
+              })
+              // Categories present in this year's transactions, for the filter dropdown
+              const yearCategories = [...new Set(transactions.map(t => t.category))].sort()
+              const includedCount = filtered.filter(t => !excludedIds.has(t.id)).length
+
+              return (
+                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden mb-6 print:hidden">
+                  <header className="p-4 border-b border-gray-200 bg-gray-50">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                      <div>
+                        <h2 className="text-base font-semibold text-gray-900">Curate {year} transactions</h2>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          Uncheck what doesn&apos;t belong on your taxes. Use the category dropdown to fix anything that landed in the wrong bucket — the checklist totals will reflect the changes.
+                        </p>
+                      </div>
+                      <p className="text-xs text-gray-500 shrink-0">
+                        <span className="font-medium text-gray-800">{includedCount}</span> of {filtered.length} matching included
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="relative flex-1 min-w-[200px]">
+                        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={curateSearch}
+                          onChange={e => setCurateSearch(e.target.value)}
+                          placeholder="Search description, category, source…"
+                          className="w-full pl-7 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <select
+                        value={curateCategoryFilter}
+                        onChange={e => setCurateCategoryFilter(e.target.value)}
+                        className="text-sm border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="all">All categories</option>
+                        {yearCategories.map(c => (
+                          <option key={c} value={c}>{emojiFor(c)} {c}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => setManyExcluded(filtered.map(t => t.id), includedCount > 0)}
+                        className="text-xs font-medium text-blue-700 hover:text-blue-900 border border-gray-200 rounded-md px-2 py-1.5 flex items-center gap-1"
+                      >
+                        {includedCount === filtered.length ? <CheckSquare size={12} /> : <Square size={12} />}
+                        {includedCount > 0 ? 'Exclude all matching' : 'Include all matching'}
+                      </button>
+                    </div>
+                  </header>
+                  <div className="max-h-[60vh] overflow-y-auto divide-y divide-gray-100">
+                    {filtered.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-8">No transactions match.</p>
+                    ) : (
+                      [...filtered]
+                        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+                        .map(t => {
+                          const isExcluded = excludedIds.has(t.id)
+                          return (
+                            <div
+                              key={t.id}
+                              className={`flex items-center gap-3 px-4 py-2 hover:bg-gray-50 ${isExcluded ? 'opacity-50' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={!isExcluded}
+                                onChange={e => setExcluded(t.id, !e.target.checked)}
+                                className="w-4 h-4 rounded border-gray-300 shrink-0"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
+                                <p className="text-xs text-gray-400">{t.date} · {t.source}</p>
+                              </div>
+                              <select
+                                value={t.category}
+                                onChange={e => updateTransactionCategory(t.id, e.target.value)}
+                                className="text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-md px-2 py-1 max-w-[170px] focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                title="Re-categorize this transaction"
+                              >
+                                {pickerCategories.map(c => (
+                                  <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>
+                                ))}
+                              </select>
+                              <span className={`text-sm font-semibold w-20 text-right shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                                {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
+                              </span>
+                            </div>
+                          )
+                        })
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+
             {/* Sections */}
-            <div className="space-y-4 print:space-y-3">
+            <div className={`space-y-4 print:space-y-3 ${view !== 'checklist' ? 'print:block hidden' : ''}`}>
               {CHECKLIST.map((section, sectionIdx) => {
                 const subtotal = sectionMoneyTotal(sectionIdx)
                 return (
@@ -501,9 +706,9 @@ export default function TaxChecklistPage() {
                                         .map(t => {
                                           const isExcluded = excludedIds.has(t.id)
                                           return (
-                                            <label
+                                            <div
                                               key={t.id}
-                                              className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-gray-50 ${
+                                              className={`flex items-center gap-2 px-3 py-1.5 text-xs ${
                                                 isExcluded ? 'opacity-50' : ''
                                               }`}
                                             >
@@ -511,17 +716,24 @@ export default function TaxChecklistPage() {
                                                 type="checkbox"
                                                 checked={!isExcluded}
                                                 onChange={e => setExcluded(t.id, !e.target.checked)}
-                                                className="w-3.5 h-3.5 rounded border-gray-300"
+                                                className="w-3.5 h-3.5 rounded border-gray-300 shrink-0"
                                               />
                                               <span className="flex-1 truncate text-gray-800">{t.description}</span>
                                               <span className="text-gray-400 shrink-0">{t.date}</span>
-                                              {t.category !== (row.source.kind === 'category' ? row.source.category : '') && row.source.kind === 'aggregate' && (
-                                                <span className="text-gray-400 shrink-0 text-[10px]">{t.category}</span>
-                                              )}
+                                              <select
+                                                value={t.category}
+                                                onChange={e => updateTransactionCategory(t.id, e.target.value)}
+                                                className="text-[11px] font-medium text-gray-700 bg-white border border-gray-200 rounded px-1.5 py-0.5 max-w-[140px] focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                                title="Move this transaction to a different category (updates the totals here and on the dashboard)"
+                                              >
+                                                {pickerCategories.map(c => (
+                                                  <option key={c.name} value={c.name}>{c.emoji} {c.name}</option>
+                                                ))}
+                                              </select>
                                               <span className="font-mono shrink-0 text-gray-700">
                                                 ${Math.abs(t.amount).toFixed(2)}
                                               </span>
-                                            </label>
+                                            </div>
                                           )
                                         })}
                                     </div>

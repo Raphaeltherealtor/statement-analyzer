@@ -1,7 +1,8 @@
-// v14 — Tax Export curation merged into the Tax Checklist page (per-row
-// expand to include/exclude individual transactions, persists per year).
-// Dashboard "Tax Export…" mode removed.
-const CACHE_NAME = 'statement-analyzer-v14'
+// v15 — Tax Checklist gets a flat "Curate transactions" view with
+// search + filter + per-row checkbox + inline category dropdown. The
+// per-row expansion in the Checklist view also gets the category
+// dropdown for in-line fixes without leaving the page.
+const CACHE_NAME = 'statement-analyzer-v15'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
