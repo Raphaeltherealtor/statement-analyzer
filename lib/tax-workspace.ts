@@ -70,6 +70,11 @@ export interface WorkspaceData {
   // "office_rent", "business_cards", "wages") so we can place them back in
   // the right CPA section on render.
   manualItems?: Record<string, number>
+  // Transaction IDs the user has explicitly excluded from this year's tax
+  // checklist (e.g. personal Costco run mixed in with business expenses).
+  // Auto subtotals skip these, and the printed checklist reflects the
+  // curated total — not the raw category total.
+  excludedTxnIds?: string[]
   notes?: string
 }
 

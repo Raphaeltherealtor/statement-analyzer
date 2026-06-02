@@ -14,9 +14,6 @@ import {
   History,
   Search,
   Pencil,
-  CheckSquare,
-  Square,
-  ListChecks,
   Sparkles,
   FileText,
 } from 'lucide-react'
@@ -82,11 +79,6 @@ export default function Home() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState<'expenses' | 'income'>('expenses')
-
-  // Tax export mode: when on, user gets checkboxes to curate exactly which
-  // transactions go into the tax CSV. Defaults to all selected on entry.
-  const [taxExportMode, setTaxExportMode] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   // AI re-categorize flow: open modal, kick off Claude call, preview diff,
   // user accepts/rejects per change, apply to local + Supabase.
@@ -682,46 +674,11 @@ export default function Home() {
     downloadCSV(rows, `transactions_${yearFilter !== 'all' ? yearFilter : 'all'}.csv`)
   }
 
-  // Enter tax export mode with EVERY transaction pre-selected so the user
-  // starts from "all in" and curates down by unchecking what doesn't belong.
-  const enterTaxExportMode = () => {
-    const all = new Set(allTransactions.map(t => t.id))
-    setSelectedIds(all)
-    setTaxExportMode(true)
-  }
-
-  const exitTaxExportMode = () => {
-    setTaxExportMode(false)
-    setSelectedIds(new Set())
-  }
-
-  const toggleTxnSelection = (id: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  const setCategorySelection = (_name: string, txnIds: string[], select: boolean) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (select) txnIds.forEach(id => next.add(id))
-      else txnIds.forEach(id => next.delete(id))
-      return next
-    })
-  }
-
-  // CSV with Schedule C line, sorted by line so the preparer can sum per bucket.
-  // Uses the curated selection when in tax export mode, otherwise the
-  // currently-visible filtered list.
-  const finalizeTaxExport = () => {
-    const source = taxExportMode
-      ? allTransactions.filter(t => selectedIds.has(t.id))
-      : filtered
-
-    const sorted = [...source].sort((a, b) => {
+  // Tax-line-labeled CSV using the current filter view. Curation of which
+  // transactions land in the printed tax checklist lives at /tax-checklist
+  // now — this stays as a quick raw export for power users.
+  const exportTaxCsv = () => {
+    const sorted = [...filtered].sort((a, b) => {
       const taxA = TAX_LINE[a.category] || 'Review'
       const taxB = TAX_LINE[b.category] || 'Review'
       if (taxA !== taxB) return taxA.localeCompare(taxB)
@@ -740,9 +697,7 @@ export default function Home() {
         t.source,
       ]),
     ]
-    const suffix = taxExportMode ? `selected_${sorted.length}` : (yearFilter !== 'all' ? yearFilter : 'all')
-    downloadCSV(rows, `tax_export_${suffix}.csv`)
-    if (taxExportMode) exitTaxExportMode()
+    downloadCSV(rows, `tax_lines_${yearFilter !== 'all' ? yearFilter : 'all'}.csv`)
   }
 
   return (
@@ -835,48 +790,6 @@ export default function Home() {
         {completedJobs.length > 0 && (
           <>
             <ReviewBanner count={reviewQueue.length} onOpen={() => setReviewOpen(true)} />
-
-            {taxExportMode && (
-              <div className="sticky top-2 z-30 flex items-center justify-between gap-3 bg-emerald-600 text-white rounded-xl px-4 py-3 mb-4 shadow-lg flex-wrap">
-                <div className="flex items-center gap-2 min-w-0">
-                  <ListChecks size={18} className="shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">Tax Export Mode</p>
-                    <p className="text-xs text-emerald-100">
-                      <span className="font-medium">{selectedIds.size}</span> of {allTransactions.length} transactions selected — uncheck what you don&apos;t want included.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => setSelectedIds(new Set(allTransactions.map(t => t.id)))}
-                    className="text-xs font-medium text-emerald-50 hover:text-white px-2 py-1 hidden sm:inline"
-                  >
-                    Select all
-                  </button>
-                  <button
-                    onClick={() => setSelectedIds(new Set())}
-                    className="text-xs font-medium text-emerald-50 hover:text-white px-2 py-1 hidden sm:inline"
-                  >
-                    Deselect all
-                  </button>
-                  <button
-                    onClick={finalizeTaxExport}
-                    disabled={selectedIds.size === 0}
-                    className="text-sm font-semibold bg-white text-emerald-700 hover:bg-emerald-50 disabled:bg-emerald-100 disabled:text-emerald-300 px-4 py-1.5 rounded-lg flex items-center gap-1.5"
-                  >
-                    <Download size={14} />
-                    Export {selectedIds.size}
-                  </button>
-                  <button
-                    onClick={exitTaxExportMode}
-                    className="text-sm font-medium text-emerald-50 hover:text-white border border-emerald-400 hover:border-white rounded-lg px-3 py-1.5"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* Expenses vs Income tab toggle */}
             <div className="flex gap-1 p-1 bg-gray-100 rounded-xl mb-4 max-w-md">
@@ -1008,26 +921,22 @@ export default function Home() {
                 )}
               </p>
               <div className="flex gap-2 flex-wrap">
-                {!taxExportMode && (
-                  <>
-                    <button
-                      onClick={startRecategorize}
-                      className="flex items-center gap-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg px-4 py-2 transition-colors"
-                      title="Have AI re-classify all transactions using the latest real-estate-aware rules"
-                    >
-                      <Sparkles size={14} />
-                      AI Re-categorize
-                    </button>
-                    <button
-                      onClick={enterTaxExportMode}
-                      className="flex items-center gap-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg px-4 py-2 transition-colors"
-                      title="Pick which transactions to include in the tax export"
-                    >
-                      <ListChecks size={14} />
-                      Tax Export…
-                    </button>
-                  </>
-                )}
+                <button
+                  onClick={startRecategorize}
+                  className="flex items-center gap-2 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg px-4 py-2 transition-colors"
+                  title="Have AI re-classify all transactions using the latest real-estate-aware rules"
+                >
+                  <Sparkles size={14} />
+                  AI Re-categorize
+                </button>
+                <button
+                  onClick={exportTaxCsv}
+                  className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 bg-white rounded-lg px-4 py-2 transition-colors"
+                  title="Quick tax-line CSV of the current view. For the curated CPA-ready checklist with manual fields and per-txn picking, use Tax Checklist."
+                >
+                  <Download size={14} />
+                  Tax CSV
+                </button>
                 <button
                   onClick={exportAll}
                   className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-200 bg-white rounded-lg px-4 py-2 transition-colors"
@@ -1055,58 +964,40 @@ export default function Home() {
                 <div className="space-y-1.5">
                   {[...filtered]
                     .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-                    .map(t => {
-                      const isSelected = taxExportMode && selectedIds.has(t.id)
-                      return (
-                        <div
-                          key={t.id}
-                          className={`border rounded-xl px-4 py-3 flex items-center gap-3 transition-colors ${
-                            isSelected
-                              ? 'bg-emerald-50/50 border-emerald-300'
-                              : 'bg-white border-gray-200 hover:border-blue-300'
-                          }`}
-                        >
-                          {taxExportMode && (
-                            <button
-                              onClick={() => toggleTxnSelection(t.id)}
-                              className={`shrink-0 p-1 rounded ${isSelected ? 'text-emerald-600' : 'text-gray-300 hover:text-gray-500'}`}
-                              title={isSelected ? 'Remove from tax export' : 'Add to tax export'}
-                            >
-                              {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
-                            </button>
-                          )}
-                          <span className="text-2xl shrink-0" title={t.category}>{emojiFor(t.category)}</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
-                            <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-xs text-gray-400">
-                              <span>{t.date}</span>
-                              <span className="text-gray-300">·</span>
-                              <span className="text-gray-600">{t.category}</span>
-                              {t.subcategory && t.subcategory !== t.description && (
-                                <>
-                                  <span className="text-gray-300">·</span>
-                                  <span className="text-blue-500">{t.subcategory}</span>
-                                </>
-                              )}
-                              <span className="text-gray-300">·</span>
-                              <span className="truncate">{t.source}</span>
-                            </div>
+                    .map(t => (
+                      <div
+                        key={t.id}
+                        className="bg-white border border-gray-200 rounded-xl px-4 py-3 flex items-center gap-3 hover:border-blue-300 transition-colors"
+                      >
+                        <span className="text-2xl shrink-0" title={t.category}>{emojiFor(t.category)}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-900 truncate">{t.description}</p>
+                          <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5 text-xs text-gray-400">
+                            <span>{t.date}</span>
+                            <span className="text-gray-300">·</span>
+                            <span className="text-gray-600">{t.category}</span>
+                            {t.subcategory && t.subcategory !== t.description && (
+                              <>
+                                <span className="text-gray-300">·</span>
+                                <span className="text-blue-500">{t.subcategory}</span>
+                              </>
+                            )}
+                            <span className="text-gray-300">·</span>
+                            <span className="truncate">{t.source}</span>
                           </div>
-                          <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                            {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
-                          </span>
-                          {!taxExportMode && (
-                            <button
-                              onClick={() => setEditingTxn(t)}
-                              className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
-                              title="Move to a different category"
-                            >
-                              <Pencil size={14} />
-                            </button>
-                          )}
                         </div>
-                      )
-                    })}
+                        <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                          {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
+                        </span>
+                        <button
+                          onClick={() => setEditingTxn(t)}
+                          className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
+                          title="Move to a different category"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </div>
+                    ))}
                 </div>
               )
             ) : (
@@ -1117,10 +1008,6 @@ export default function Home() {
                       key={cat.name}
                       category={cat}
                       onEditTransaction={setEditingTxn}
-                      selectionMode={taxExportMode}
-                      selectedIds={selectedIds}
-                      onToggleTransaction={toggleTxnSelection}
-                      onSetCategorySelection={setCategorySelection}
                     />
                   ))}
                 </div>

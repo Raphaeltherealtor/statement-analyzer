@@ -1,6 +1,7 @@
-// v13 — merchant normalizer keeps more context for ambiguous bank/finance
-// names (Capital One Mobile Pymt vs Capital One Auto Pymt stay separate).
-const CACHE_NAME = 'statement-analyzer-v13'
+// v14 — Tax Export curation merged into the Tax Checklist page (per-row
+// expand to include/exclude individual transactions, persists per year).
+// Dashboard "Tax Export…" mode removed.
+const CACHE_NAME = 'statement-analyzer-v14'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {

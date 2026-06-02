@@ -1,25 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, Download, Pencil, CheckSquare, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Download, Pencil } from 'lucide-react'
 import { Category, Transaction } from '@/lib/types'
 
 interface CategoryCardProps {
   category: Category
   onEditTransaction?: (txn: Transaction) => void
-  selectionMode?: boolean
-  selectedIds?: Set<string>
-  onToggleTransaction?: (id: string) => void
-  onSetCategorySelection?: (categoryName: string, txnIds: string[], select: boolean) => void
 }
 
 export default function CategoryCard({
   category,
   onEditTransaction,
-  selectionMode = false,
-  selectedIds,
-  onToggleTransaction,
-  onSetCategorySelection,
 }: CategoryCardProps) {
   const [expanded, setExpanded] = useState(false)
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'name'>('date')
@@ -64,54 +56,26 @@ export default function CategoryCard({
     a.click()
   }
 
-  const allTxnIds = category.transactions.map(t => t.id)
-  const selectedInCategory = selectionMode && selectedIds
-    ? allTxnIds.filter(id => selectedIds.has(id)).length
-    : 0
-  const allSelected = selectionMode && selectedInCategory === allTxnIds.length && allTxnIds.length > 0
-  const noneSelected = selectionMode && selectedInCategory === 0
-
   return (
-    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-colors ${
-      selectionMode && selectedInCategory > 0
-        ? 'border-emerald-300 ring-1 ring-emerald-200'
-        : 'border-gray-200'
-    }`}>
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       {/* Header */}
       <div
         className="flex items-center justify-between p-5 cursor-pointer hover:bg-gray-50 transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-center gap-3 min-w-0">
-          {selectionMode && onSetCategorySelection && (
-            <button
-              onClick={e => {
-                e.stopPropagation()
-                onSetCategorySelection(category.name, allTxnIds, !allSelected)
-              }}
-              className={`p-1 rounded ${allSelected ? 'text-emerald-600' : noneSelected ? 'text-gray-300' : 'text-emerald-500'}`}
-              title={allSelected ? 'Deselect all in this category' : 'Select all in this category'}
-            >
-              {allSelected ? <CheckSquare size={20} /> : <Square size={20} />}
-            </button>
-          )}
           <span className="text-3xl">{category.emoji}</span>
           <div className="min-w-0">
             <h3 className="font-semibold text-gray-900">{category.name}</h3>
             <p className="text-sm text-gray-500">
               {category.count} transaction{category.count !== 1 ? 's' : ''}
-              {selectionMode && (
-                <span className="text-emerald-600 font-medium">
-                  {' · '}{selectedInCategory} selected
-                </span>
-              )}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right">
             <p className="text-xl font-bold text-gray-900">${category.total.toFixed(2)}</p>
-            {topMerchants.length > 0 && !expanded && !selectionMode && (
+            {topMerchants.length > 0 && !expanded && (
               <p className="text-xs text-gray-400">
                 Top: {topMerchants[0][0].slice(0, 20)}
               </p>
@@ -173,49 +137,35 @@ export default function CategoryCard({
 
           {/* Transaction list */}
           <div className="divide-y divide-gray-50 max-h-80 overflow-y-auto">
-            {sorted.map(t => {
-              const isSelected = selectionMode && selectedIds?.has(t.id)
-              return (
-                <div
-                  key={t.id}
-                  className={`px-5 py-2.5 flex items-center justify-between gap-2 group ${
-                    isSelected ? 'bg-emerald-50/50' : 'hover:bg-gray-50'
-                  }`}
-                >
-                  {selectionMode && onToggleTransaction && (
-                    <button
-                      onClick={e => { e.stopPropagation(); onToggleTransaction(t.id) }}
-                      className={`shrink-0 p-1 rounded ${isSelected ? 'text-emerald-600' : 'text-gray-300 hover:text-gray-500'}`}
-                      title={isSelected ? 'Remove from tax export' : 'Add to tax export'}
-                    >
-                      {isSelected ? <CheckSquare size={18} /> : <Square size={18} />}
-                    </button>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-800 truncate">{t.description}</p>
-                    <div className="flex gap-2 mt-0.5">
-                      <p className="text-xs text-gray-400">{t.date}</p>
-                      {t.subcategory && t.subcategory !== t.description && (
-                        <p className="text-xs text-blue-500">{t.subcategory}</p>
-                      )}
-                      <p className="text-xs text-gray-300">{t.source}</p>
-                    </div>
+            {sorted.map(t => (
+              <div
+                key={t.id}
+                className="px-5 py-2.5 flex items-center justify-between gap-2 hover:bg-gray-50 group"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-800 truncate">{t.description}</p>
+                  <div className="flex gap-2 mt-0.5">
+                    <p className="text-xs text-gray-400">{t.date}</p>
+                    {t.subcategory && t.subcategory !== t.description && (
+                      <p className="text-xs text-blue-500">{t.subcategory}</p>
+                    )}
+                    <p className="text-xs text-gray-300">{t.source}</p>
                   </div>
-                  <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                    {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
-                  </span>
-                  {onEditTransaction && !selectionMode && (
-                    <button
-                      onClick={e => { e.stopPropagation(); onEditTransaction(t) }}
-                      className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
-                      title="Move to a different category"
-                    >
-                      <Pencil size={14} />
-                    </button>
-                  )}
                 </div>
-              )
-            })}
+                <span className={`text-sm font-semibold shrink-0 ${t.amount < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                  {t.amount < 0 ? '+' : ''}${Math.abs(t.amount).toFixed(2)}
+                </span>
+                {onEditTransaction && (
+                  <button
+                    onClick={e => { e.stopPropagation(); onEditTransaction(t) }}
+                    className="text-gray-300 hover:text-blue-600 p-1.5 rounded-md hover:bg-blue-50 shrink-0"
+                    title="Move to a different category"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
             {sorted.length === 0 && (
               <p className="text-center text-sm text-gray-400 py-4">No transactions match filter</p>
             )}

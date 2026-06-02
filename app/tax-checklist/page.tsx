@@ -1,8 +1,19 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Printer, Save, RefreshCw, Check } from 'lucide-react'
+import {
+  ArrowLeft,
+  Printer,
+  Save,
+  RefreshCw,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CheckSquare,
+  Square,
+  MinusSquare,
+} from 'lucide-react'
 import { CHECKLIST, ChecklistRow, SECTIONS_IN_SCHEDULE_C_TOTAL } from '@/lib/checklist-template'
 import { WorkspaceData } from '@/lib/tax-workspace'
 import { Transaction } from '@/lib/types'
@@ -10,15 +21,16 @@ import { Transaction } from '@/lib/types'
 const NOW_YEAR = new Date().getFullYear()
 const YEAR_OPTIONS = [NOW_YEAR + 1, NOW_YEAR, NOW_YEAR - 1, NOW_YEAR - 2, NOW_YEAR - 3]
 
-// Sum of selected categories' transactions for the active year. Amounts are
-// stored signed (positive = expense, negative = income); we sum absolute
-// values so income categories (Income & Deposits) and expense categories
-// both render as positive totals.
-function sumCategories(txns: Transaction[], categories: string[]): number {
+// Pick out the transactions a category-based row pulls from. Used both to
+// compute the running total and to render the inline picker that lets the
+// user exclude individual rows from the checklist.
+function txnsForCategories(txns: Transaction[], categories: string[]): Transaction[] {
   const set = new Set(categories)
-  return txns
-    .filter(t => set.has(t.category))
-    .reduce((s, t) => s + Math.abs(t.amount), 0)
+  return txns.filter(t => set.has(t.category))
+}
+
+function sumTxns(txns: Transaction[]): number {
+  return txns.reduce((s, t) => s + Math.abs(t.amount), 0)
 }
 
 function readPath(obj: unknown, path: string): unknown {
@@ -65,6 +77,8 @@ export default function TaxChecklistPage() {
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
+  // Which auto rows are currently expanded (showing their underlying txns).
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
 
   // Load workspace + all transactions whenever the year changes
   useEffect(() => {
@@ -113,6 +127,42 @@ export default function TaxChecklistPage() {
     setDirty(true)
   }
 
+  // Excluded transaction IDs for this year (memoized as a Set for fast lookup).
+  const excludedIds = useMemo(
+    () => new Set(workspace.excludedTxnIds || []),
+    [workspace.excludedTxnIds]
+  )
+
+  const setExcluded = (id: string, exclude: boolean) => {
+    setWorkspace(w => {
+      const current = new Set(w.excludedTxnIds || [])
+      if (exclude) current.add(id)
+      else current.delete(id)
+      return { ...w, excludedTxnIds: Array.from(current) }
+    })
+    setDirty(true)
+  }
+
+  const setManyExcluded = (ids: string[], exclude: boolean) => {
+    if (ids.length === 0) return
+    setWorkspace(w => {
+      const current = new Set(w.excludedTxnIds || [])
+      if (exclude) ids.forEach(id => current.add(id))
+      else ids.forEach(id => current.delete(id))
+      return { ...w, excludedTxnIds: Array.from(current) }
+    })
+    setDirty(true)
+  }
+
+  const toggleRowExpanded = (key: string) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setJustSaved(false)
@@ -143,13 +193,20 @@ export default function TaxChecklistPage() {
     | { kind: 'date'; value: string | null }
     | { kind: 'text'; value: string | null }
 
+  // For auto rows, return the transactions that back the row so we can both
+  // sum them and render the expand-to-cherry-pick UI.
+  const txnsBackingRow = (row: ChecklistRow): Transaction[] => {
+    const s = row.source
+    if (s.kind === 'category') return txnsForCategories(transactions, [s.category])
+    if (s.kind === 'aggregate') return txnsForCategories(transactions, s.categories)
+    return []
+  }
+
   const rowValueAndKind = (row: ChecklistRow): RowValue => {
     const s = row.source
-    if (s.kind === 'category') {
-      return { kind: 'number', value: sumCategories(transactions, [s.category]) }
-    }
-    if (s.kind === 'aggregate') {
-      return { kind: 'number', value: sumCategories(transactions, s.categories) }
+    if (s.kind === 'category' || s.kind === 'aggregate') {
+      const included = txnsBackingRow(row).filter(t => !excludedIds.has(t.id))
+      return { kind: 'number', value: sumTxns(included) }
     }
     if (s.kind === 'manual') {
       return { kind: 'number', value: workspace.manualItems?.[s.key] ?? 0 }
@@ -230,7 +287,7 @@ export default function TaxChecklistPage() {
             <div>
               <h1 className="text-3xl font-bold text-gray-900">Tax Deduction Checklist</h1>
               <p className="text-gray-500 mt-1">
-                Auto-filled from your transactions + your manual entries. Print or save as PDF to send to your CPA.
+                Auto-filled from your transactions + your manual entries. Expand any auto row to pick which transactions to include, then print.
               </p>
             </div>
 
@@ -304,7 +361,12 @@ export default function TaxChecklistPage() {
                 <div>
                   <p className="text-xs uppercase tracking-wide text-gray-500">Transactions loaded</p>
                   <p className="text-2xl font-bold text-gray-900">{transactions.length}</p>
-                  <p className="text-xs text-gray-400">From {year} statements</p>
+                  <p className="text-xs text-gray-400">
+                    From {year} statements
+                    {excludedIds.size > 0 && (
+                      <span className="text-amber-700 font-medium"> · {excludedIds.size} excluded</span>
+                    )}
+                  </p>
                 </div>
               </div>
             </div>
@@ -329,66 +391,144 @@ export default function TaxChecklistPage() {
                         {section.rows.map(row => {
                           const v = rowValueAndKind(row)
                           const isAuto = row.source.kind === 'category' || row.source.kind === 'aggregate'
+                          const backingTxns = isAuto ? txnsBackingRow(row) : []
+                          const includedCount = backingTxns.filter(t => !excludedIds.has(t.id)).length
+                          const totalCount = backingTxns.length
+                          const hasExpandable = isAuto && totalCount > 0
+                          const isExpanded = expandedRows.has(row.label)
+                          const allIncluded = includedCount === totalCount && totalCount > 0
+                          const noneIncluded = includedCount === 0 && totalCount > 0
+                          const partial = !allIncluded && !noneIncluded && totalCount > 0
+                          const BulkIcon = allIncluded ? CheckSquare : noneIncluded ? Square : MinusSquare
+
                           return (
-                            <tr key={row.label} className="border-b border-gray-100 last:border-0">
-                              <td className="px-4 py-2 text-gray-800 align-top">
-                                <div className="flex items-center gap-2">
-                                  <span>{row.label}</span>
-                                  {isAuto && (
-                                    <span className="text-[10px] uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded print:hidden">
-                                      auto
-                                    </span>
+                            <Fragment key={row.label}>
+                              <tr className="border-b border-gray-100 last:border-0">
+                                <td className="px-4 py-2 text-gray-800 align-top">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    {hasExpandable && (
+                                      <button
+                                        onClick={() => toggleRowExpanded(row.label)}
+                                        className="text-gray-400 hover:text-gray-700 print:hidden"
+                                        title={isExpanded ? 'Collapse' : 'Pick which transactions to include'}
+                                      >
+                                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                      </button>
+                                    )}
+                                    <span>{row.label}</span>
+                                    {isAuto && (
+                                      <span className="text-[10px] uppercase tracking-wider text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded print:hidden">
+                                        auto
+                                      </span>
+                                    )}
+                                    {hasExpandable && partial && (
+                                      <span className="text-[10px] uppercase tracking-wider text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded print:hidden">
+                                        {includedCount}/{totalCount} of total included
+                                      </span>
+                                    )}
+                                  </div>
+                                  {row.note && (
+                                    <p className="text-xs text-gray-400 mt-0.5">{row.note}</p>
                                   )}
-                                </div>
-                                {row.note && (
-                                  <p className="text-xs text-gray-400 mt-0.5">{row.note}</p>
-                                )}
-                              </td>
-                              <td className="px-4 py-2 text-right align-top w-44">
-                                {v.kind === 'number' ? (
-                                  isAuto ? (
-                                    <span className="font-mono text-gray-900">
-                                      {(v.value as number) > 0
-                                        ? `$${(v.value as number).toFixed(2)}`
-                                        : <span className="text-gray-300">—</span>}
-                                    </span>
+                                </td>
+                                <td className="px-4 py-2 text-right align-top w-44">
+                                  {v.kind === 'number' ? (
+                                    isAuto ? (
+                                      <span className="font-mono text-gray-900">
+                                        {(v.value as number) > 0
+                                          ? `$${(v.value as number).toFixed(2)}`
+                                          : <span className="text-gray-300">—</span>}
+                                      </span>
+                                    ) : (
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        value={(v.value as number) || ''}
+                                        placeholder="0.00"
+                                        onChange={e => {
+                                          const num = parseFloat(e.target.value)
+                                          const val = Number.isFinite(num) ? num : 0
+                                          if (row.source.kind === 'manual') updateManual(row.source.key, val)
+                                          else if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, val)
+                                        }}
+                                        className="w-32 text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      />
+                                    )
+                                  ) : v.kind === 'date' ? (
+                                    <input
+                                      type="date"
+                                      value={typeof v.value === 'string' ? v.value : ''}
+                                      onChange={e => {
+                                        if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, e.target.value)
+                                      }}
+                                      className="text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
                                   ) : (
                                     <input
-                                      type="number"
-                                      step="0.01"
-                                      value={(v.value as number) || ''}
-                                      placeholder="0.00"
+                                      type="text"
+                                      value={typeof v.value === 'string' ? v.value : ''}
+                                      placeholder="—"
                                       onChange={e => {
-                                        const num = parseFloat(e.target.value)
-                                        const val = Number.isFinite(num) ? num : 0
-                                        if (row.source.kind === 'manual') updateManual(row.source.key, val)
-                                        else if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, val)
+                                        if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, e.target.value)
                                       }}
-                                      className="w-32 text-right font-mono text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      className="w-44 text-right text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     />
-                                  )
-                                ) : v.kind === 'date' ? (
-                                  <input
-                                    type="date"
-                                    value={typeof v.value === 'string' ? v.value : ''}
-                                    onChange={e => {
-                                      if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, e.target.value)
-                                    }}
-                                    className="text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                ) : (
-                                  <input
-                                    type="text"
-                                    value={typeof v.value === 'string' ? v.value : ''}
-                                    placeholder="—"
-                                    onChange={e => {
-                                      if (row.source.kind === 'workspace') updateWorkspacePath(row.source.path, e.target.value)
-                                    }}
-                                    className="w-44 text-right text-sm border border-gray-200 rounded px-2 py-1 print:border-0 print:bg-transparent print:p-0 print:w-auto focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  />
-                                )}
-                              </td>
-                            </tr>
+                                  )}
+                                </td>
+                              </tr>
+
+                              {/* Expanded transaction picker (hidden in print so the
+                                  print is just the curated total). */}
+                              {hasExpandable && isExpanded && (
+                                <tr className="print:hidden">
+                                  <td colSpan={2} className="bg-gray-50 px-6 py-3">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <p className="text-xs text-gray-500">
+                                        {includedCount} of {totalCount} included · ${sumTxns(backingTxns.filter(t => !excludedIds.has(t.id))).toFixed(2)} contributing
+                                      </p>
+                                      <button
+                                        onClick={() => setManyExcluded(backingTxns.map(t => t.id), allIncluded)}
+                                        className="text-xs font-medium text-blue-700 hover:text-blue-900 flex items-center gap-1"
+                                        title={allIncluded ? 'Exclude every transaction from this row' : 'Include every transaction in this row'}
+                                      >
+                                        <BulkIcon size={14} />
+                                        {allIncluded ? 'Exclude all' : 'Include all'}
+                                      </button>
+                                    </div>
+                                    <div className="max-h-60 overflow-y-auto divide-y divide-gray-100 bg-white rounded-lg border border-gray-200">
+                                      {[...backingTxns]
+                                        .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+                                        .map(t => {
+                                          const isExcluded = excludedIds.has(t.id)
+                                          return (
+                                            <label
+                                              key={t.id}
+                                              className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-gray-50 ${
+                                                isExcluded ? 'opacity-50' : ''
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={!isExcluded}
+                                                onChange={e => setExcluded(t.id, !e.target.checked)}
+                                                className="w-3.5 h-3.5 rounded border-gray-300"
+                                              />
+                                              <span className="flex-1 truncate text-gray-800">{t.description}</span>
+                                              <span className="text-gray-400 shrink-0">{t.date}</span>
+                                              {t.category !== (row.source.kind === 'category' ? row.source.category : '') && row.source.kind === 'aggregate' && (
+                                                <span className="text-gray-400 shrink-0 text-[10px]">{t.category}</span>
+                                              )}
+                                              <span className="font-mono shrink-0 text-gray-700">
+                                                ${Math.abs(t.amount).toFixed(2)}
+                                              </span>
+                                            </label>
+                                          )
+                                        })}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
