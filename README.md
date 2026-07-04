@@ -16,6 +16,25 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Authentication (single-user gate)
+
+The whole app — every page and API route — is locked behind a password. Only
+someone who knows the password can log in; there are no public routes except the
+login screen itself. This is enforced in `proxy.ts` (this Next version's
+middleware), which verifies a signed, HttpOnly session cookie on every request.
+
+Set these two environment variables (locally in `.env.local`, and in the Vercel
+project settings for production):
+
+| Variable | What it is |
+| --- | --- |
+| `APP_PASSWORD` | The password you type to log in. Choose something strong. |
+| `SESSION_SECRET` | A random string (16+ chars) used to sign session cookies. Generate with `openssl rand -base64 32`. Keep it secret; changing it logs everyone out. |
+
+If either is missing, the login endpoint returns a 503 explaining what to set,
+so the app fails closed rather than open. Log out any time via the button in the
+top-right corner.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
