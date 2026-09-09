@@ -1,7 +1,6 @@
-// v16 — Tax Checklist money inputs get $ prefix + comma formatting via
-// a shared MoneyInput component. Auto rows are now editable too — typing
-// a value stores a per-row override (with a revert arrow to drop back).
-const CACHE_NAME = 'statement-analyzer-v16'
+// v17 — new app logo + full PWA icon set (any/maskable manifest entries,
+// apple-icon + favicon via the app/ file conventions).
+const CACHE_NAME = 'statement-analyzer-v17'
 const STATIC_ASSETS = ['/favicon.ico', '/icon-192x192.png', '/icon-512x512.png']
 
 self.addEventListener('install', (event) => {
